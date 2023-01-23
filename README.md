@@ -9,3 +9,6 @@ This is still in development, need to;
 * have a 3D case made
 
 This project was written using Visual Studio Code and the PlatformIO extension
+
+Version 1 display.
+![alt text width="600"](/pictures/v1.jpg)
