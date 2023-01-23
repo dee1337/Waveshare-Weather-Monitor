@@ -523,7 +523,7 @@ void displayCloudCover(int x, int y, int cover) {
 
 void displayWeatherDescription(int x, int y) {
   display.drawRect(x, y - 4, SCREEN_WIDTH, 27, GxEPD_BLACK);
-  String description = weather.description + ", " + weather.main;
+  String description = weather.description; // + ", " + weather.main;
   
   display.setFont(&FreeMonoBold12pt7b);
   unsigned int MsgWidth = 28;
@@ -532,7 +532,7 @@ void displayWeatherDescription(int x, int y) {
     MsgWidth = 52;
     y = y - 7;
   }
-  drawStringMaxWidth(x + 3, y + 15, MsgWidth, titleCase(description), LEFT); // 28 character screen width at this font size
+  drawStringMaxWidth(x + 3, y + 15, MsgWidth, titleCase(description), CENTER); // 28 character screen width at this font size
   display.setFont(&DejaVu_Sans_Bold_11);
 }
 
@@ -560,7 +560,8 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
   }
 
   if (align == CENTER) {
-    x = x - w / 2;
+    //x = x - (w / 2);
+    x = (w - text.length()) / 2;
   }
 
   display.setCursor(x, y);
