@@ -59,7 +59,7 @@ void displayCloudCover(int x, int y, int cover);
 void addCloud(int x, int y, int scale, int linesize);
 void displayHeader(void);
 void displayWind(int x, int y, float angle, float windspeed, int radius);
-void arrow(int x, int y, int asize, float aangle, int pwidth, int plength);
+void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour);
 String windDegToDirection(float winddirection);
 void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alignment align);
 String titleCase(String text);
@@ -82,6 +82,7 @@ void noData(int x, int y, bool large_size);
 void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
 void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
 void cloudyIcon(int x, int y, bool large_size, String icon_name);
+void veryCloudyIcon(int x, int y, bool large_size, String icon_name);
 void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
 void rainIcon(int x, int y, bool large_size, String icon_name);
 void thunderStormIcon(int x, int y, bool large_size, String icon_name);
@@ -580,7 +581,7 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
   int dxi;
   int dyi;
 
-  arrow(x + offset, y + offset, radius - 11, angle, 15, 22); // Show wind direction on outer circle of width and length
+  arrow(x + offset, y + offset, radius - 11, angle, 15, 22, GxEPD_RED); // Show wind direction on outer circle of width and length
   display.setTextSize(0);
   display.drawRect(x - radius, y - radius, 129, 128, GxEPD_BLACK);
   
@@ -626,7 +627,7 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
 
 }
 
-void arrow(int x, int y, int asize, float aangle, int pwidth, int plength) {
+void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour) {
   float dx = (asize - 10) * cos((aangle - 90) * PI / 180) + x; // calculate X position
   float dy = (asize - 10) * sin((aangle - 90) * PI / 180) + y; // calculate Y position
   float x1 = 0;         float y1 = plength;
@@ -639,7 +640,7 @@ void arrow(int x, int y, int asize, float aangle, int pwidth, int plength) {
   float yy2 = y2 * cos(angle) + x2 * sin(angle) + dy;
   float xx3 = x3 * cos(angle) - y3 * sin(angle) + dx;
   float yy3 = y3 * cos(angle) + x3 * sin(angle) + dy;
-  display.fillTriangle(xx1, yy1, xx3, yy3, xx2, yy2, GxEPD_RED);
+  display.fillTriangle(xx1, yy1, xx3, yy3, xx2, yy2, colour);
 }
 
 String windDegToDirection(float winddirection) {
@@ -1118,18 +1119,20 @@ void displayWeatherIcon(int x, int y, String icon, bool large_size) {
     y = y + 65;
   }
 
-  if (icon == "01d") {
-    sunnyIcon(x, y, large_size, icon, GxEPD_RED);
+  if (icon == "01d") {                                      // sun
+    sunnyIcon(x, y, large_size, icon, GxEPD_RED);           
   } else if (icon == "01n") {
     sunnyIcon(x, y, large_size, icon, GxEPD_BLACK);
-  } else if (icon == "02d" || icon == "04d") {
+  } else if (icon == "02d") {                               // few clouds (clouds and sun)
     mostlySunnyIcon(x, y, large_size, icon, GxEPD_RED);
-  } else if (icon == "02n" || icon == "04n") {
+  } else if (icon == "02n") {
     mostlySunnyIcon(x, y, large_size, icon, GxEPD_BLACK);
-  } else if (icon == "03d" || icon == "03n") {
+  } else if (icon == "03d" || icon == "03n") {            // scattered clouds, no sun
     cloudyIcon(x, y, large_size, icon);
+  } else if (icon == "04d" || icon == "04n") {            // broken clouds, more clouds than scatterred!
+    veryCloudyIcon(x, y, large_size, icon);
   } else if (icon == "09d") {
-    chanceOfRainIcon(x, y, large_size, icon, GxEPD_RED);
+    chanceOfRainIcon(x, y, large_size, icon, GxEPD_BLACK);
   } else if (icon == "09n") {
     chanceOfRainIcon(x, y, large_size, icon, GxEPD_BLACK);
   } else if (icon == "10d" || icon == "10n") {
@@ -1230,9 +1233,36 @@ void cloudyIcon(int x, int y, bool large_size, String icon_name) {
       addMoon(x, y + offset, scale);
     }
 
-    addCloud(x + 30, y - 20 + offset, 4, linesize); // Cloud top right
-    addCloud(x - 20, y - 10 + offset, 6, linesize); // Cloud top left
-    addCloud(x, y + offset + 15, scale, linesize); // Main cloud
+    addCloud(x, y + offset, scale, linesize); // Main cloud
+  }
+}
+
+void veryCloudyIcon(int x, int y, bool large_size, String icon_name) {
+  int scale = SMALL;
+  int offset = 0;
+  int linesize = 3;
+
+  if (large_size) {
+    scale = LARGE;
+    offset = 12;
+  }
+
+  if (scale == SMALL) {
+    if (icon_name.endsWith("n")) 
+      addMoon(x, y + offset, scale);
+
+    linesize = 1;
+    addCloud(x - 5, y - 4 + offset, 3, linesize);
+    addCloud(x, y + offset, scale, linesize);
+  }
+  else {
+    if (icon_name.endsWith("n")) {
+      addMoon(x, y + offset, scale);
+    }
+
+    addCloud(x + 28, y - 18 + offset, 4, linesize); // Cloud top right
+    addCloud(x - 20, y - 8 + offset, 6, linesize); // Cloud top left
+    addCloud(x, y + offset + 9, scale, linesize); // Main cloud
   }
 }
 
@@ -1427,7 +1457,7 @@ void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color) {
   display.fillCircle(x, y, scale, icon_color);
   if (icon_color != GxEPD_RED) {        // not day time or 2 colour display
     display.fillCircle(x, y, scale - linesize, GxEPD_WHITE);
-  }
+  } 
 
   for (float i = 0; i < 360; i = i + 45) {
     dxo = 2.2 * scale * cos((i - 90) * 3.14 / 180); dxi = dxo * 0.6;
@@ -1474,7 +1504,7 @@ void addCloud(int x, int y, int scale, int linesize) {
 void addRain(int x, int y, int scale) {
   for (byte i = 0; i < 6; i++) {
     display.fillCircle(x - scale * 4 + scale * i * 1.3, y + scale * 1.9 + (scale == SMALL ? 3 : 0), scale / 3, GxEPD_BLACK);
-    arrow(x - scale * 4 + scale * i * 1.3 + (scale == SMALL ? 6 : 4), y + scale * 1.6 + (scale == SMALL ? -3 : -1), scale / 6, 40, scale / 1.6, scale * 1.2);
+    arrow(x - scale * 4 + scale * i * 1.3 + (scale == SMALL ? 6 : 4), y + scale * 1.6 + (scale == SMALL ? -3 : -1), scale / 6, 40, scale / 1.6, scale * 1.2, GxEPD_BLACK);
   }
 }
 
