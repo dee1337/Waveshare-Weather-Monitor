@@ -1205,10 +1205,29 @@ void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_co
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    //display.drawTriangle(x, y, x - 2, y + 3, x + 2, y + 3, GxEPD_RED);
+    //display.drawTriangle(x, y + 4, x - 2, y + 1, x + 2, y - 1, GxEPD_RED);
+
+    x = x + 10;   // bottom right
+    y = y;
+    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
+    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
+
+    x = x - 11;   // top left
+    y = y - 14;
+    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
+    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
+
+    x = x - 7;    //bottom left
+    y = y + 10;
+    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
+    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
+
+  } else {  
+    scale = scale * 1.5;
+    addSun(x, y + offset, scale, large_size, icon_color);
   }
 
-  scale = scale * 1.5;
-  addSun(x, y + offset, scale, large_size, icon_color);
 }
 
 void cloudyIcon(int x, int y, bool large_size, String icon_name) {
