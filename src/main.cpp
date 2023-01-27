@@ -438,8 +438,10 @@ void displayInformation(bool today_flag, bool forecast_flag) {
   do {
     displayHeader();
     displayTemperature(0, 15);
+    weather.icon = "50d";
     displayWeatherIcon(140, 15, weather.icon, large_icon); // Weather icon
     displayWind(319, 64, weather.wind_deg, weather.wind_speed, 49); // Wind direction info
+    forecast[4].icon = "50d";
     displayWeatherForecast(0, 172);                       // Forecast
     displaySunAndMoon(0, 238);                            // Sunset and sunrise and moon state with icons
     displayWeatherDescription(0, 148);                    // Description of the weather now
@@ -1613,13 +1615,20 @@ void addThunderStorm(int x, int y, int scale, uint16_t colour) {
 }
 
 void addFog(int x, int y, int scale, int linesize, uint16_t colour) {
-  if (scale == SMALL) 
+  if (scale == SMALL) {
     y -= 10;
-  
+  }
+
   for (byte i = 0; i < 6; i++) {
-    display.fillRect(x - scale * 3, y + scale * 1.5, scale * 6, linesize, colour);
-    display.fillRect(x - scale * 3, y + scale * 2.0, scale * 6, linesize, colour);
-    display.fillRect(x - scale * 3, y + scale * 2.5, scale * 6, linesize, colour);
+    display.fillRect((x + 8) - scale * 3, y + scale * -1, scale * 4, linesize, colour);
+    display.fillRect((x + 10) - scale * 3, y + scale * -0.5, scale * 5, linesize, colour);
+    display.fillRect((x + 5) - scale * 3, y + scale * 0, scale * 3, linesize, colour);
+    display.fillRect((x + 12) - scale * 3, y + scale * 0.5, scale * 2, linesize, colour);
+    display.fillRect((x + 8) - scale * 3, y + scale * 1, scale * 4, linesize, colour);
+
+    display.fillRect(x - scale * 3, y + scale * 1.5, scale * 4, linesize, colour);
+    display.fillRect((x + 5) - scale * 3, y + scale * 2.0, scale * 4, linesize, colour);
+    display.fillRect((x + 10) - scale * 3, y + scale * 2.5, scale * 3, linesize, colour);
   }
 }
 
