@@ -44,6 +44,7 @@ boolean small_icon = false;
 enum alignment {LEFT, RIGHT, CENTER};
 enum pressure_trend {LEVEL, UP, DOWN};
 enum sun_direction {SUN_UP, SUN_DOWN};
+enum star_size {SMALL_STAR, MEDIUM_STAR, LARGE_STAR};
 
 /* Function prototypes */
 bool getTodaysWeather(void);
@@ -65,17 +66,17 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
 String titleCase(String text);
 void displayWeatherDescription(int x, int y);
 void displayMoonPhase(int x, int y);
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope);
+void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour);
 void displayRain(int x, int y);
 String convertUnixTime(int unix_time);
 double normalizedMoonPhase(int d, int m, int y);
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere);
+void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface);
 void displaySunAndMoon(int x, int y);
 void moonPhase(int x, int y, int day, int month, int year, String hemisphere);
 int julianDate(int d, int m, int y);
 void displayWeatherForecast(int x, int y);
 void displaySingleForecast(int x, int y, int offset, int index);
-void displayWeatherIcon(int x, int y, String icon, bool large_size);
+void displayWeatherIcon(int x, int y, String icon, bool icon_size);
 void addMoon (int x, int y, int scale);
 void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color);
 void noData(int x, int y, bool large_size);
@@ -91,11 +92,11 @@ void fogIcon(int x, int y, bool large_size, String icon_name);
 void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
 void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction);
 void addCloud(int x, int y, int scale, int linesize);
-void addRain(int x, int y, int scale);
-void addSnow(int x, int y, int scale);
-void addThunderStorm(int x, int y, int scale);
-void addFog(int x, int y, int scale, int linesize);
-
+void addRain(int x, int y, int scale, uint16_t colour);
+void addSnow(int x, int y, int scale, uint16_t colour);
+void addThunderStorm(int x, int y, int scale, uint16_t colour);
+void addFog(int x, int y, int scale, int linesize, uint16_t colour);
+void addStar(int x, int y, star_size starsize);
 
 /* Globals etc. */
 WiFiClientSecure wifiClient;
@@ -156,8 +157,6 @@ void setup() {
 
   initialiseDisplay();
 
-  Serial.printf("Display Width %d, Display Height %d\n", display.width(), display.height());
-
   Serial.println("\n##################################");
   Serial.println(F("ESP32 Information:"));
   Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n", ESP.getHeapSize(), ESP.getHeapSize()-ESP.getFreeHeap(), ESP.getFreeHeap());
@@ -165,7 +164,6 @@ void setup() {
   Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n", ESP.getPsramSize(), ESP.getFreePsram());
   Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
   Serial.printf("Flash Size %d, Flash Speed %d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
-  Serial.printf("Sizeof byte:%d  uint: %d  uint8: %d  uint16: %d  uint32: %d  int: %d\n", sizeof(byte), sizeof(uint), sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(int));
   Serial.println("##################################\n");
 
   WiFi.begin(SSID, WIFI_PASSWORD);
@@ -383,8 +381,8 @@ bool getWeatherForecast(void)
       forecast[i].clouds = doc["list"][i]["clouds"]["all"];
       forecast[i].wind_speed = doc["list"][i]["wind"]["speed"];
       forecast[i].wind_deg = doc["list"][i]["wind"]["deg"];
-//      forecast[i].rain = doc["list"][i][];
-//      forecast[i].snow = doc["list"][i][];
+      forecast[i].rain = doc["list"][i]["rain"]["3h"];
+      forecast[i].snow = doc["list"][i]["snow"]["3h"];
       forecast[i].period = doc["list"][i]["dt_txt"].as<String>();      
     }
 
@@ -727,7 +725,7 @@ void displaySunAndMoon(int x, int y) {
   drawString(x + 40, y + 15, convertUnixTime(weather.sunrise).substring(0, 8), LEFT);   // 08:00 AM
   drawString(x + 40, y + 40, convertUnixTime(weather.sunset).substring(0, 8), LEFT);    // 19:00 PM
 
-  drawMoon(x + 117, y - 7, day_utc, month_utc, year_utc, Hemisphere);
+  drawMoon(x + 117, y - 7, day_utc, month_utc, year_utc, Hemisphere, 38, true);
   moonPhase(x + 183, y + 20, day_utc, month_utc, year_utc, Hemisphere);
 }
 
@@ -746,11 +744,26 @@ void displayWeatherForecast(int x, int y) {
 }
 
 void displaySingleForecast(int x, int y, int offset, int index) {
-  display.drawRect(x, y, offset - 1, 65, GxEPD_BLACK);
-  display.drawLine(x, y + 13, x + offset - 2, y + 13, GxEPD_BLACK);
+  display.drawRect(x, y, offset - 1, 65, GxEPD_BLACK);                // big rectangle
+  display.drawLine(x, y + 13, x + offset - 2, y + 13, GxEPD_BLACK);   // line under time
+  
+  // If night time invert weather icon to show it's night time, feedback from focus group :-)
+  if (forecast[index].icon.endsWith("n")) {    
+    display.fillRect(x, y + 14, offset - 1, 54, GxEPD_BLACK);
+  }
+
   displayWeatherIcon(x + offset / 2 + 1, y + 35, forecast[index].icon, small_icon);
+
   drawString(x + offset / 2, y + 3, String(forecast[index].period.substring(11, 16)), CENTER);
-  drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER); //+ "*", LEFT); if you want the ° symbol in this font
+    // Set text colour to white as the square is now black to show it's night time
+  if (forecast[index].icon.endsWith("n")) {
+    display.setTextColor(GxEPD_WHITE);
+    drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
+    // Reset set text colour to black  
+    display.setTextColor(GxEPD_BLACK);
+  } else {
+    drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
+  }
 }
 
 String convertUnixTime(int unix_time) {
@@ -765,8 +778,8 @@ String convertUnixTime(int unix_time) {
 }
 
 
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere) {
-  const int diameter = 38;
+void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface) {
+//  const int diameter = 38;
   double phase = normalizedMoonPhase(dd, mm, yy);
 
   if (hemisphere == "south") {
@@ -804,231 +817,233 @@ void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere) {
 
   display.drawCircle(x + diameter - 1, y + diameter, diameter / 2, GxEPD_BLACK);
 
-  // Need offset as the surface code was written by SeBassTian23.
-  x = x + 57;
-  y = y + 58;
-  // Add moon surface on top
-  display.drawPixel(x-diameter+22, y-diameter+1, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+3, GxEPD_BLACK);
-  display.drawPixel(x-diameter+24, y-diameter+3, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+4, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+4, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+4, GxEPD_BLACK);
-  display.drawPixel(x-diameter+24, y-diameter+4, GxEPD_BLACK);
-  display.drawPixel(x-diameter+26, y-diameter+4, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+5, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+5, GxEPD_BLACK);
-  display.drawPixel(x-diameter+26, y-diameter+5, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+6, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+6, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+6, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+23, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+25, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+28, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+30, y-diameter+7, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+21, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+23, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+26, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+28, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+29, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+31, y-diameter+8, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+22, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+23, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+25, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+26, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+28, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+29, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+30, y-diameter+9, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+23, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+24, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+26, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+29, y-diameter+10, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+21, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+24, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+28, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+30, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+31, y-diameter+11, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+21, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+23, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+24, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+25, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+32, y-diameter+12, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+22, y-diameter+13, GxEPD_BLACK);
-  display.drawPixel(x-diameter+1, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+25, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+28, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+31, y-diameter+14, GxEPD_BLACK);
-  display.drawPixel(x-diameter+1, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+29, y-diameter+15, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+16, GxEPD_BLACK);
-  display.drawPixel(x-diameter+1, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+4, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+17, GxEPD_BLACK);
-  display.drawPixel(x-diameter+1, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+18, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+19, GxEPD_BLACK);
-  display.drawPixel(x-diameter+1, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+20, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+21, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+22, GxEPD_BLACK);
-  display.drawPixel(x-diameter+2, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+4, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+23, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+4, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+24, GxEPD_BLACK);
-  display.drawPixel(x-diameter+3, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+5, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+21, y-diameter+25, GxEPD_BLACK);
-  display.drawPixel(x-diameter+4, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+12, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+13, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+26, GxEPD_BLACK);
-  display.drawPixel(x-diameter+6, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+20, y-diameter+27, GxEPD_BLACK);
-  display.drawPixel(x-diameter+7, y-diameter+28, GxEPD_BLACK);
-  display.drawPixel(x-diameter+8, y-diameter+28, GxEPD_BLACK);
-  display.drawPixel(x-diameter+10, y-diameter+28, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+28, GxEPD_BLACK);
-  display.drawPixel(x-diameter+18, y-diameter+28, GxEPD_BLACK);
-  display.drawPixel(x-diameter+9, y-diameter+29, GxEPD_BLACK);
-  display.drawPixel(x-diameter+11, y-diameter+29, GxEPD_BLACK);
-  display.drawPixel(x-diameter+14, y-diameter+29, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+29, GxEPD_BLACK);
-  display.drawPixel(x-diameter+16, y-diameter+29, GxEPD_BLACK);
-  display.drawPixel(x-diameter+15, y-diameter+30, GxEPD_BLACK);
-  display.drawPixel(x-diameter+19, y-diameter+30, GxEPD_BLACK);
-  display.drawPixel(x-diameter+17, y-diameter+31, GxEPD_BLACK);  
+  if (surface) {
+    // Need offset as the surface code was written by SeBassTian23.
+    x = x + 57;
+    y = y + 59;
+    // Add moon surface on top
+    display.drawPixel(x-diameter+22, y-diameter+1, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+3, GxEPD_BLACK);
+    display.drawPixel(x-diameter+24, y-diameter+3, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+4, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+4, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+4, GxEPD_BLACK);
+    display.drawPixel(x-diameter+24, y-diameter+4, GxEPD_BLACK);
+    display.drawPixel(x-diameter+26, y-diameter+4, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+5, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+5, GxEPD_BLACK);
+    display.drawPixel(x-diameter+26, y-diameter+5, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+6, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+6, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+6, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+23, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+25, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+28, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+30, y-diameter+7, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+21, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+23, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+26, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+28, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+29, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+31, y-diameter+8, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+22, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+23, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+25, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+26, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+28, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+29, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+30, y-diameter+9, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+23, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+24, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+26, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+29, y-diameter+10, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+21, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+24, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+28, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+30, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+31, y-diameter+11, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+21, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+23, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+24, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+25, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+32, y-diameter+12, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+22, y-diameter+13, GxEPD_BLACK);
+    display.drawPixel(x-diameter+1, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+25, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+28, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+31, y-diameter+14, GxEPD_BLACK);
+    display.drawPixel(x-diameter+1, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+29, y-diameter+15, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+16, GxEPD_BLACK);
+    display.drawPixel(x-diameter+1, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+4, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+17, GxEPD_BLACK);
+    display.drawPixel(x-diameter+1, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+18, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+19, GxEPD_BLACK);
+    display.drawPixel(x-diameter+1, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+20, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+21, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+22, GxEPD_BLACK);
+    display.drawPixel(x-diameter+2, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+4, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+23, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+4, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+24, GxEPD_BLACK);
+    display.drawPixel(x-diameter+3, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+5, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+21, y-diameter+25, GxEPD_BLACK);
+    display.drawPixel(x-diameter+4, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+12, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+13, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+26, GxEPD_BLACK);
+    display.drawPixel(x-diameter+6, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+20, y-diameter+27, GxEPD_BLACK);
+    display.drawPixel(x-diameter+7, y-diameter+28, GxEPD_BLACK);
+    display.drawPixel(x-diameter+8, y-diameter+28, GxEPD_BLACK);
+    display.drawPixel(x-diameter+10, y-diameter+28, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+28, GxEPD_BLACK);
+    display.drawPixel(x-diameter+18, y-diameter+28, GxEPD_BLACK);
+    display.drawPixel(x-diameter+9, y-diameter+29, GxEPD_BLACK);
+    display.drawPixel(x-diameter+11, y-diameter+29, GxEPD_BLACK);
+    display.drawPixel(x-diameter+14, y-diameter+29, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+29, GxEPD_BLACK);
+    display.drawPixel(x-diameter+16, y-diameter+29, GxEPD_BLACK);
+    display.drawPixel(x-diameter+15, y-diameter+30, GxEPD_BLACK);
+    display.drawPixel(x-diameter+19, y-diameter+30, GxEPD_BLACK);
+    display.drawPixel(x-diameter+17, y-diameter+31, GxEPD_BLACK);  
+  }
 }
 
 double normalizedMoonPhase(int d, int m, int y) {
@@ -1110,66 +1125,79 @@ void moonPhase(int x, int y, int day, int month, int year, String hemisphere) {
   }
 }
 
-void displayWeatherIcon(int x, int y, String icon, bool large_size) {
-  if (large_size) {
-    display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
-    displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend);
-    displayRain(x + 60, y + 115);
+void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
+  if (large_icon) { // == large icon, TODO: need to change this logic, variable name!
+    // Night time
+    if (icon.endsWith("n")) { 
+      display.fillRect(x + 5, y, 124, 128, GxEPD_BLACK);
+      display.setTextColor(GxEPD_WHITE);  // invert for night time
+      displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_WHITE);
+      displayRain(x + 60, y + 115);
+      display.setTextColor(GxEPD_BLACK);  // reset colour
+    }
+    else {
+      display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
+      displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_BLACK);
+      displayRain(x + 60, y + 115);
+    }
     x = x + 65;
     y = y + 65;
   }
 
   if (icon == "01d") {                                      // sun
-    sunnyIcon(x, y, large_size, icon, GxEPD_RED);           
+    sunnyIcon(x, y, large_icon, icon, GxEPD_RED);           
   } else if (icon == "01n") {
-    sunnyIcon(x, y, large_size, icon, GxEPD_BLACK);
+    sunnyIcon(x, y, large_icon, icon, GxEPD_BLACK);
   } else if (icon == "02d") {                               // few clouds (clouds and sun)
-    mostlySunnyIcon(x, y, large_size, icon, GxEPD_RED);
+    mostlySunnyIcon(x, y, large_icon, icon, GxEPD_RED);
   } else if (icon == "02n") {
-    mostlySunnyIcon(x, y, large_size, icon, GxEPD_BLACK);
+    mostlySunnyIcon(x, y, large_icon, icon, GxEPD_BLACK);
   } else if (icon == "03d" || icon == "03n") {            // scattered clouds, no sun
-    cloudyIcon(x, y, large_size, icon);
+    cloudyIcon(x, y, large_icon, icon);
   } else if (icon == "04d" || icon == "04n") {            // broken clouds, more clouds than scatterred!
-    veryCloudyIcon(x, y, large_size, icon);
+    veryCloudyIcon(x, y, large_icon, icon);
   } else if (icon == "09d") {
-    chanceOfRainIcon(x, y, large_size, icon, GxEPD_BLACK);
+    chanceOfRainIcon(x, y, large_icon, icon, GxEPD_RED);
   } else if (icon == "09n") {
-    chanceOfRainIcon(x, y, large_size, icon, GxEPD_BLACK);
+    chanceOfRainIcon(x, y, large_icon, icon, GxEPD_BLACK);
   } else if (icon == "10d" || icon == "10n") {
-    rainIcon(x, y, large_size, icon);
+    rainIcon(x, y, large_icon, icon);
   } else if (icon == "11d" || icon == "11n") {
-    thunderStormIcon(x, y, large_size, icon);
+    thunderStormIcon(x, y, large_icon, icon);
   } else if (icon == "13d" || icon == "13n") {
-    snowIcon(x, y, large_size, icon);
+    snowIcon(x, y, large_icon, icon);
   } else if (icon == "50d") {
-    hazeIcon(x, y, large_size, icon, GxEPD_RED);
+    hazeIcon(x, y, large_icon, icon, GxEPD_RED);
   } else if (icon == "50n") {
-    fogIcon(x, y, large_size, icon);
+    fogIcon(x, y, large_icon, icon);
   } else {
-    noData(x, y, large_size);
+    noData(x, y, large_icon);
   }
 }
 
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope) {
+void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour) {
   display.setFont(&DSEG7_Classic_Bold_21);
   drawString(x - 35, y - 95, String(pressure, 0), LEFT);    // metric
   display.setFont(&DejaVu_Sans_Bold_11);
   drawString(x + 36, y - 90, "hPa", LEFT);
   if (slope == LEVEL) {
-    display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, GxEPD_BLACK); // Steady
+    display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, colour); // Steady
   }
 
   if (slope == DOWN) {
-    display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, GxEPD_BLACK); // Falling
+    display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, colour); // Falling
   }
 
   if (slope == UP) {
-    display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, GxEPD_BLACK); // Rising
+    display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, colour); // Rising
   }
 }
 
 void displayRain(int x, int y) {
-  if (forecast[1].rain > 0) drawString(x, y, String(forecast[1].rain, (forecast[1].rain > 0.5 ? 2 : 3)) + "mm Rain", CENTER); // Only display rainfall if > 0
+  if (forecast[1].rain > 0) {
+
+    drawString(x, y, String(forecast[0].rain, (forecast[0].rain > 0.5 ? 2 : 3)) + "mm Rain", CENTER); // Only display rainfall if > 0
+  }
 }
 
 void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
@@ -1186,11 +1214,12 @@ void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t i
     linesize = 1;
   }
 
-  if (icon_name.endsWith("n")) {
+  if (icon_name.endsWith("n")) {    // Night time, add stars
     addMoon(x, y + offset, scale);
+  } else {                          // Day time, add sun
+    addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
   }
 
-  addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
   addCloud(x, y + offset, scale, linesize);
 }
 
@@ -1203,31 +1232,38 @@ void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_co
     offset = 10;
   }
 
-  if (icon_name.endsWith("n")) {
+  if (icon_name.endsWith("n")) {    // Night time, show stars
     addMoon(x, y + offset, scale);
-    //display.drawTriangle(x, y, x - 2, y + 3, x + 2, y + 3, GxEPD_RED);
-    //display.drawTriangle(x, y + 4, x - 2, y + 1, x + 2, y - 1, GxEPD_RED);
 
-    x = x + 10;   // bottom right
-    y = y;
-    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
-    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
+    if (!large_size) {
+      // Small stars
+      addStar(x, y, SMALL_STAR);
+      addStar(x - 18, y + 3, SMALL_STAR);
+      addStar(x + 17, y - 10, SMALL_STAR);
 
-    x = x - 11;   // top left
-    y = y - 14;
-    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
-    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
-
-    x = x - 7;    //bottom left
-    y = y + 10;
-    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_BLACK);
-    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_BLACK);
-
-  } else {  
+      // Medium stars
+      addStar(x - 1, y - 14, MEDIUM_STAR);    // top left star
+      addStar(x + 10, y, MEDIUM_STAR);    // bottom right star
+    } else {
+      // Fill area with random stars
+      int horizontal = 0;
+      int vertical = 0;
+      int left = 150;
+      int top = 45;
+      int width = 115;
+      int height = 90;
+      display.setTextColor(GxEPD_WHITE);
+      for (int i = 0; i <= 41; i++) { 
+        horizontal = (int) ( ((rand() / (RAND_MAX * 1.0f)) * width) + left);
+        vertical = (int) ( ((rand() / (RAND_MAX * 1.0f)) * height) + top);            
+        drawString(horizontal, vertical, ".", LEFT);
+      }
+      display.setTextColor(GxEPD_BLACK);
+    }
+  } else {                        // Day time, show sun
     scale = scale * 1.5;
     addSun(x, y + offset, scale, large_size, icon_color);
   }
-
 }
 
 void cloudyIcon(int x, int y, bool large_size, String icon_name) {
@@ -1271,8 +1307,9 @@ void veryCloudyIcon(int x, int y, bool large_size, String icon_name) {
       addMoon(x, y + offset, scale);
 
     linesize = 1;
-    addCloud(x - 5, y - 4 + offset, 3, linesize);
-    addCloud(x, y + offset, scale, linesize);
+    addCloud(x - 7, y - 7 + offset, 2, linesize); // Left v.small
+    addCloud(x + 8, y - 10 + offset, 2, linesize); // Right v.small
+    addCloud(x, y + offset, scale, linesize);     // Main cloud
   }
   else {
     if (icon_name.endsWith("n")) {
@@ -1301,11 +1338,13 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addRain(x, y + offset, scale, GxEPD_WHITE);
+  } else {
+    addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
+    addRain(x, y + offset, scale, GxEPD_BLACK);
   }
 
-  addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
   addCloud(x, y + offset, scale, linesize);
-  addRain(x, y + offset, scale);
 }
 
 void rainIcon(int x, int y, bool large_size, String icon_name) {
@@ -1324,10 +1363,12 @@ void rainIcon(int x, int y, bool large_size, String icon_name) {
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addRain(x, y + offset, scale, GxEPD_WHITE);
+  } else {
+    addRain(x, y + offset, scale, GxEPD_BLACK);
   }
 
   addCloud(x, y + offset, scale, linesize);
-  addRain(x, y + offset, scale);
 }
 
 void thunderStormIcon(int x, int y, bool large_size, String icon_name) {
@@ -1346,10 +1387,12 @@ void thunderStormIcon(int x, int y, bool large_size, String icon_name) {
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addThunderStorm(x, y + offset, scale, GxEPD_WHITE);
+  } else {
+    addThunderStorm(x, y + offset, scale, GxEPD_BLACK);
   }
 
   addCloud(x, y + offset, scale, linesize);
-  addThunderStorm(x, y + offset, scale);
 }
 
 void snowIcon(int x, int y, bool large_size, String icon_name) {
@@ -1368,10 +1411,12 @@ void snowIcon(int x, int y, bool large_size, String icon_name) {
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addSnow(x, y + offset, scale, GxEPD_WHITE);
+  } else {
+    addSnow(x, y + offset, scale, GxEPD_BLACK);
   }
 
   addCloud(x, y + offset, scale, linesize);
-  addSnow(x, y + offset, scale);
 }
 
 void fogIcon(int x, int y, bool large_size, String icon_name) {
@@ -1390,10 +1435,11 @@ void fogIcon(int x, int y, bool large_size, String icon_name) {
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addFog(x, y + offset, scale, linesize, GxEPD_WHITE);
+  } else {
+    addFog(x, y + offset, scale, linesize, GxEPD_BLACK);
+    addCloud(x, y + offset, scale, linesize);
   }
-
-  addCloud(x, y + offset, scale, linesize);
-  addFog(x, y + offset, scale, linesize);
 }
 
 void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
@@ -1412,10 +1458,11 @@ void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_col
 
   if (icon_name.endsWith("n")) {
     addMoon(x, y + offset, scale);
+    addFog(x, y + offset, scale * 1.4, linesize, GxEPD_WHITE);
+  } else {
+    addSun(x, y + offset, scale * 1.4, large_size, icon_color);
+    addFog(x, y + offset, scale * 1.4, linesize, GxEPD_BLACK);
   }
-
-  addSun(x, y + offset, scale * 1.4, large_size, icon_color);
-  addFog(x, y + offset, scale * 1.4, linesize);
 }
 
 void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction) {
@@ -1455,13 +1502,17 @@ void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction) {
 
 void addMoon (int x, int y, int scale) {
   if (scale == LARGE) {
-    display.fillCircle(x - 37, y - 33, scale, GxEPD_BLACK);
-    display.fillCircle(x - 27, y - 33, scale * 1.6, GxEPD_WHITE);
+    // time_t now = time(NULL);
+    // struct tm * now_utc  = gmtime(&now);
+
+    // drawMoon(x - 65, y - 60, now_utc->tm_mday, now_utc->tm_mon + 1, now_utc->tm_year + 1900, Hemisphere, 32, false);  
+    display.fillCircle(x - 37, y - 33, scale, GxEPD_WHITE);
+    display.fillCircle(x - 25, y - 33, scale * 1.6, GxEPD_BLACK);  
   }
   else
   {
-    display.fillCircle(x - 20, y - 15, scale, GxEPD_BLACK);
-    display.fillCircle(x - 15, y - 15, scale * 1.6, GxEPD_WHITE);
+    display.fillCircle(x - 20, y - 15, scale, GxEPD_WHITE);
+    display.fillCircle(x - 15, y - 15, scale * 1.6, GxEPD_BLACK);
   }
 }
 
@@ -1520,58 +1571,55 @@ void addCloud(int x, int y, int scale, int linesize) {
   display.fillRect(x - scale * 3 + 2, y - scale + linesize - 1, scale * 5.9, scale * 2 - linesize * 2 + 2, GxEPD_WHITE); // Upper and lower lines
 }
 
-void addRain(int x, int y, int scale) {
+void addRain(int x, int y, int scale, uint16_t colour) {
   for (byte i = 0; i < 6; i++) {
-    display.fillCircle(x - scale * 4 + scale * i * 1.3, y + scale * 1.9 + (scale == SMALL ? 3 : 0), scale / 3, GxEPD_BLACK);
-    arrow(x - scale * 4 + scale * i * 1.3 + (scale == SMALL ? 6 : 4), y + scale * 1.6 + (scale == SMALL ? -3 : -1), scale / 6, 40, scale / 1.6, scale * 1.2, GxEPD_BLACK);
+    display.fillCircle(x - scale * 4 + scale * i * 1.3, y + scale * 1.9 + (scale == SMALL ? 3 : 0), scale / 3, colour);
+    arrow(x - scale * 4 + scale * i * 1.3 + (scale == SMALL ? 6 : 4), y + scale * 1.6 + (scale == SMALL ? -3 : -1), scale / 6, 40, scale / 1.6, scale * 1.2, colour);
   }
 }
 
-void addSnow(int x, int y, int scale) {
+void addSnow(int x, int y, int scale, uint16_t colour) {
   int dxo, dyo, dxi, dyi;
 
   for (byte flakes = 0; flakes < 5; flakes++) {
     for (int i = 0; i < 360; i = i + 45) {
       dxo = 0.5 * scale * cos((i - 90) * 3.14 / 180); dxi = dxo * 0.1;
       dyo = 0.5 * scale * sin((i - 90) * 3.14 / 180); dyi = dyo * 0.1;
-      display.drawLine(dxo + x + 0 + flakes * 1.5 * scale - scale * 3, dyo + y + scale * 2, dxi + x + 0 + flakes * 1.5 * scale - scale * 3, dyi + y + scale * 2, GxEPD_BLACK);
+      display.drawLine(dxo + x + 0 + flakes * 1.5 * scale - scale * 3, dyo + y + scale * 2, dxi + x + 0 + flakes * 1.5 * scale - scale * 3, dyi + y + scale * 2, colour);
     }
   }
 }
 
-void addThunderStorm(int x, int y, int scale) {
+void addThunderStorm(int x, int y, int scale, uint16_t colour) {
   y = y + scale / 2;
 
   for (byte i = 0; i < 5; i++) {
-    display.drawLine(x - scale * 4 + scale * i * 1.5 + 0, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 0, y + scale, GxEPD_BLACK);
+    display.drawLine(x - scale * 4 + scale * i * 1.5 + 0, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 0, y + scale, colour);
     if (scale != SMALL) {
-      display.drawLine(x - scale * 4 + scale * i * 1.5 + 1, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 1, y + scale, GxEPD_BLACK);
-      display.drawLine(x - scale * 4 + scale * i * 1.5 + 2, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 2, y + scale, GxEPD_BLACK);
+      display.drawLine(x - scale * 4 + scale * i * 1.5 + 1, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 1, y + scale, colour);
+      display.drawLine(x - scale * 4 + scale * i * 1.5 + 2, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 2, y + scale, colour);
     }
-    display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 0, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 0, GxEPD_BLACK);
+    display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 0, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 0, colour);
     if (scale != SMALL) {
-      display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 1, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 1, GxEPD_BLACK);
-      display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 2, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 2, GxEPD_BLACK);
+      display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 1, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 1, colour);
+      display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 2, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 2, colour);
     }
-    display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 0, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5, GxEPD_BLACK);
+    display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 0, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5, colour);
     if (scale != SMALL) {
-      display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 1, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 1, y + scale * 1.5, GxEPD_BLACK);
-      display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 2, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 2, y + scale * 1.5, GxEPD_BLACK);
+      display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 1, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 1, y + scale * 1.5, colour);
+      display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 2, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 2, y + scale * 1.5, colour);
     }
   }
 }
 
-void addFog(int x, int y, int scale, int linesize) {
+void addFog(int x, int y, int scale, int linesize, uint16_t colour) {
   if (scale == SMALL) 
     y -= 10;
-
-  if (scale == SMALL) 
-    linesize = 1;
   
   for (byte i = 0; i < 6; i++) {
-    display.fillRect(x - scale * 3, y + scale * 1.5, scale * 6, linesize, GxEPD_BLACK);
-    display.fillRect(x - scale * 3, y + scale * 2.0, scale * 6, linesize, GxEPD_BLACK);
-    display.fillRect(x - scale * 3, y + scale * 2.5, scale * 6, linesize, GxEPD_BLACK);
+    display.fillRect(x - scale * 3, y + scale * 1.5, scale * 6, linesize, colour);
+    display.fillRect(x - scale * 3, y + scale * 2.0, scale * 6, linesize, colour);
+    display.fillRect(x - scale * 3, y + scale * 2.5, scale * 6, linesize, colour);
   }
 }
 
@@ -1590,6 +1638,16 @@ void noData(int x, int y, bool large_size) {
   }
 
   drawString(x - 20, y - 10 + offset, "N/A", LEFT);
+}
+
+void addStar(int x, int y, star_size starsize) {
+  if (starsize == SMALL_STAR) {
+    display.drawTriangle(x, y, x - 2, y + 3, x + 2, y + 3, GxEPD_WHITE);
+    display.drawTriangle(x, y + 4, x - 2, y + 1, x + 2, y + 1, GxEPD_WHITE);
+  } else if (starsize == MEDIUM_STAR) {
+    display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_WHITE);
+    display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_WHITE);
+  }
 }
 
 void drawString(int x, int y, String text, alignment align) {
