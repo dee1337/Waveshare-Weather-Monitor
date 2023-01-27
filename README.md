@@ -14,3 +14,6 @@ Libraries used: GxEPD2, ArduinoJson.
 
 Version 1 display.
 ![alt text width="600"](/pictures/v1.jpg)
+
+Version 2 display.
+![alt text width="600"](/pictures/v2.jpg)
