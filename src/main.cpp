@@ -68,7 +68,6 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
 String titleCase(String text);
 void displayWeatherDescription(int x, int y);
 void displayMoonPhase(int x, int y);
-// void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour);
 void displayRain(int x, int y);
 String convertUnixTime(uint32_t unix_time);
 double normalizedMoonPhase(int d, int m, int y);
@@ -230,7 +229,6 @@ static void updateLocalTime(void)
   }
 
   // Update buffer with current time/date
-  //strftime(dateStringBuff, sizeof(dateStringBuff), "%a  %d-%b-%y", &timeinfo);      // Sat 15-Jan-23
   strftime(dateStringBuff, sizeof(dateStringBuff), "%d", &timeinfo);      // Sat 15-Jan-23
   strftime(dayStringBuff, sizeof(dayStringBuff), "%A", &timeinfo);      // Saturday
   strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);          // 15:15
@@ -723,7 +721,6 @@ void displayWeatherForecast(int x, int y) {
   //(x, y, w, h, Data[], Range, len, title)
   drawSingleGraph(155, 205, 96, 75, temp, forecast_counter, "Temperature");
   drawSingleGraph(295, 205, 96, 75, pressure, forecast_counter, "Pressure (hPa)");
-  // drawSingleGraph(297, 205, 95, 75, rain, forecast_counter, "Rainfall (mm)");
 }
 
 void displaySingleForecast(int x, int y, int offset, int index) {
@@ -783,234 +780,6 @@ void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int
   }
 
   display.drawCircle(x + diameter - 1, y + diameter, diameter / 2, GxEPD_BLACK);
-
-  if (surface) {
-    // Need offset as the surface code was written by SeBassTian23.
-    x = x + 57;
-    y = y + 59;
-    // Add moon surface on top
-    display.drawPixel(x-diameter+22, y-diameter+1, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+3, GxEPD_BLACK);
-    display.drawPixel(x-diameter+24, y-diameter+3, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+4, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+4, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+4, GxEPD_BLACK);
-    display.drawPixel(x-diameter+24, y-diameter+4, GxEPD_BLACK);
-    display.drawPixel(x-diameter+26, y-diameter+4, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+5, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+5, GxEPD_BLACK);
-    display.drawPixel(x-diameter+26, y-diameter+5, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+6, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+6, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+6, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+23, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+25, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+28, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+30, y-diameter+7, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+21, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+23, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+26, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+28, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+29, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+31, y-diameter+8, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+22, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+23, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+25, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+26, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+28, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+29, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+30, y-diameter+9, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+23, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+24, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+26, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+29, y-diameter+10, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+21, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+24, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+28, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+30, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+31, y-diameter+11, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+21, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+23, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+24, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+25, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+32, y-diameter+12, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+22, y-diameter+13, GxEPD_BLACK);
-    display.drawPixel(x-diameter+1, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+25, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+28, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+31, y-diameter+14, GxEPD_BLACK);
-    display.drawPixel(x-diameter+1, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+29, y-diameter+15, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+16, GxEPD_BLACK);
-    display.drawPixel(x-diameter+1, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+4, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+17, GxEPD_BLACK);
-    display.drawPixel(x-diameter+1, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+18, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+19, GxEPD_BLACK);
-    display.drawPixel(x-diameter+1, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+20, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+21, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+22, GxEPD_BLACK);
-    display.drawPixel(x-diameter+2, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+4, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+23, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+4, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+24, GxEPD_BLACK);
-    display.drawPixel(x-diameter+3, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+5, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+21, y-diameter+25, GxEPD_BLACK);
-    display.drawPixel(x-diameter+4, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+12, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+13, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+26, GxEPD_BLACK);
-    display.drawPixel(x-diameter+6, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+20, y-diameter+27, GxEPD_BLACK);
-    display.drawPixel(x-diameter+7, y-diameter+28, GxEPD_BLACK);
-    display.drawPixel(x-diameter+8, y-diameter+28, GxEPD_BLACK);
-    display.drawPixel(x-diameter+10, y-diameter+28, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+28, GxEPD_BLACK);
-    display.drawPixel(x-diameter+18, y-diameter+28, GxEPD_BLACK);
-    display.drawPixel(x-diameter+9, y-diameter+29, GxEPD_BLACK);
-    display.drawPixel(x-diameter+11, y-diameter+29, GxEPD_BLACK);
-    display.drawPixel(x-diameter+14, y-diameter+29, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+29, GxEPD_BLACK);
-    display.drawPixel(x-diameter+16, y-diameter+29, GxEPD_BLACK);
-    display.drawPixel(x-diameter+15, y-diameter+30, GxEPD_BLACK);
-    display.drawPixel(x-diameter+19, y-diameter+30, GxEPD_BLACK);
-    display.drawPixel(x-diameter+17, y-diameter+31, GxEPD_BLACK);  
-  }
 }
 
 double normalizedMoonPhase(int d, int m, int y) {
@@ -1128,24 +897,6 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
     noData(x, y, large_icon);
   }
 }
-
-// void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour) {
-//   display.setFont(&DSEG7_Classic_Bold_21);
-//   drawString(x - 35, y - 95, String(pressure, 0), LEFT);    // metric
-//   display.setFont(&DejaVu_Sans_Bold_11);
-//   drawString(x + 36, y - 90, "hPa", LEFT);
-//   if (slope == LEVEL) {
-//     display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, colour); // Steady
-//   }
-
-//   if (slope == DOWN) {
-//     display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, colour); // Falling
-//   }
-
-//   if (slope == UP) {
-//     display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, colour); // Rising
-//   }
-// }
 
 void displayRain(int x, int y) {
   if (forecast[1].rain > 0) {
@@ -1654,11 +1405,6 @@ void drawGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], flo
 
     float steps = (ymax-ymin)/(ticklines);
 
-    // Serial.println("Y-Min: " + String(ymin));
-    // Serial.println("Y-Max: " + String(ymax));
-    // Serial.println("Steps: " + String(steps));
-    // Serial.println("Ticks: " + String(ticklines));
-
     // Title
     display.setFont();
     drawString(x + w / 2, y - 24, title, CENTER);
@@ -1707,14 +1453,6 @@ void drawGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], flo
         y2 = y+h-1;
       if(y4 > y+h-1)
         y4 = y+h-1;
-      // display.drawLine(x1, y3, x2, y4, GxEPD_RED);
-
-      // for(byte r = 0; r<ceil(w/len)+1; r++)
-      // {
-      //   float m = (y4-y3)/(x2-x1);
-      //   float b = y3-m*x1;
-      //   display.drawLine(x1+r, y+h-1, x1+r, m*(x1+r)+b, GxEPD_RED);
-      // }
 
       display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
 
