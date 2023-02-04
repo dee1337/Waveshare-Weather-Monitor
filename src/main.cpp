@@ -34,7 +34,7 @@ const uint SCREEN_WIDTH = 400;
 const uint SCREEN_HEIGHT = 300;
 const String VERSION = "v3";
 const String Hemisphere = "north";
-const int forecast_counter = 16;         // number of forecasts to get/show.
+const int forecast_counter = 24;         // number of forecasts to get/show.
 
 #define LARGE  10
 #define SMALL  4
@@ -43,7 +43,7 @@ boolean large_icon = true;
 boolean small_icon = false;
 
 enum alignment {LEFT, RIGHT, CENTER};
-enum pressure_trend {LEVEL, UP, DOWN};
+// enum pressure_trend {LEVEL, UP, DOWN};
 enum sun_direction {SUN_UP, SUN_DOWN};
 enum star_size {SMALL_STAR, MEDIUM_STAR, LARGE_STAR};
 
@@ -68,7 +68,7 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
 String titleCase(String text);
 void displayWeatherDescription(int x, int y);
 void displayMoonPhase(int x, int y);
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour);
+// void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour);
 void displayRain(int x, int y);
 String convertUnixTime(uint32_t unix_time);
 double normalizedMoonPhase(int d, int m, int y);
@@ -108,13 +108,9 @@ WiFiClientSecure wifiClient;
 String ipAddress = "0:0:0:0";
 int rssi = 0;
 
-float temperature_readings[forecast_counter] = {0};
-float rain_readings[forecast_counter]        = {0};
-float humidity_readings[forecast_counter]    = {0};
-
 // current
 typedef struct WeatherStruct {
-  pressure_trend   trend = LEVEL;
+  // pressure_trend   trend = LEVEL;
   uint8_t  humidity = 0;
   uint8_t  clouds = 0;
   uint16_t wind_deg = 0;
@@ -361,7 +357,7 @@ bool getWeatherForecast(void)
 
   Serial.println("Parsing Forecast JSON...");
 
-  DynamicJsonDocument doc(20*1024);
+  DynamicJsonDocument doc(24*1024);
 
   Serial.println("Deserialization process starting...");
 
@@ -393,15 +389,6 @@ bool getWeatherForecast(void)
       forecast[i].period = doc["list"][i]["dt_txt"].as<String>();      
     }
 
-    float ptrend = forecast[1].pressure - forecast[0].pressure; // Measure pressure slope between ~now and later
-    ptrend = ((int)(ptrend * 10)) / 10.0;               // Remove any small variations less than 0.1
-    weather.trend = LEVEL;
-
-    if (ptrend > 0)  
-      weather.trend = UP;
-    else if (ptrend < 0)  
-      weather.trend = DOWN;
-
     Serial.println("##Still need to check on rainfall and snowfall returns!##");
     Serial.print("\nDone in "); Serial.print(millis()-dt); Serial.println(" ms");
   }
@@ -410,8 +397,6 @@ bool getWeatherForecast(void)
 
   return retcode;
 }
-
-
 
 void initialiseDisplay() {
   display.init(115200, true, 2, false); // USE THIS for Waveshare boards with "clever" reset circuit, 2ms reset pulse
@@ -454,6 +439,7 @@ void displayInformation(bool today_flag, bool forecast_flag) {
     display.drawLine(5, 180, 115, 180, GxEPD_BLACK);
     display.drawLine(125, 180, 395, 180, GxEPD_BLACK);
 
+    displayWind(48, 225, weather.wind_deg, weather.wind_speed, 44); // Wind direction info
     displayWeatherForecast(118, 115);                       // Forecast
 
     displaySunAndMoon(0, 120);                            // Sunset and sunrise and moon state with icons
@@ -478,9 +464,6 @@ void displayHeader(void) {
   display.setTextSize(2);
   drawString(24, 30, dateStringBuff, LEFT);
 
-  //display.setTextSize(3);
-  //drawString(5, 22, dateStringBuff, LEFT);
-
   display.setTextSize(0);
   display.setFont(&FreeMonoBold9pt7b);
   drawString(60, 92, dayStringBuff, CENTER);
@@ -494,7 +477,7 @@ void displayTemperature(int x, int y) {
   drawString(x + 103, y, "Max", LEFT);
   drawString(x - 10, y + 46, "Humidity", LEFT);
   drawString(x + 88, y + 46, "Clouds", LEFT);
-  drawString(x + 35, y + 75, "Pressure", LEFT);
+  drawString(x + 30, y + 75, "Pressure", LEFT);
 
   display.setFont(&DejaVu_Sans_Bold_11);
   display.setTextSize(1);
@@ -502,7 +485,7 @@ void displayTemperature(int x, int y) {
   drawString(x + 123, y + 20, String(weather.high, 0) + "'", RIGHT);
   drawString(x - 9, y + 66, String(weather.humidity) + "%", LEFT);
   drawString(x + 123, y + 66, String(weather.clouds) + "%", RIGHT);
-  drawString(x + 58, y + 93, String(weather.pressure, 0), CENTER);
+  drawString(x + 53, y + 93, String(weather.pressure, 0), CENTER);
 
   display.setFont(&DSEG7_Classic_Bold_21);
   display.setTextSize(2);
@@ -517,20 +500,10 @@ void displayTemperature(int x, int y) {
     display.setTextSize(1);
     drawString(x + 67, y + 10, "'", LEFT);    // Add-in ° symbol ' in this font
   } else {
-    drawString(x + 18, y + 2, String(fabs(weather.temperature), 0), LEFT); // Show current Temperature without a '-' minus sign
+    drawString(x + 15, y + 2, String(fabs(weather.temperature), 0), LEFT); // Show current Temperature without a '-' minus sign
     display.setTextSize(1);
-    drawString(x + 85, y + 8, "'", LEFT);    // Add-in ° symbol ' in this font 
+    drawString(x + 82, y + 8, "'", LEFT);    // Add-in ° symbol ' in this font 
   }
-
-  // if (weather.trend == LEVEL) {
-  //   display.drawInvertedBitmap(x + 60, y + 96, FL_Arrow, 18, 18, GxEPD_BLACK); // Steady
-  // }
-  // if (weather.trend == DOWN) {
-  //   display.drawInvertedBitmap(x + 60, y + 96, DN_Arrow, 18, 18, GxEPD_BLACK); // Falling
-  // }
-  // if (weather.trend == UP) {
-  //   display.drawInvertedBitmap(x + 60, y + 96, UP_Arrow, 18, 18, GxEPD_BLACK); // Rising
-  // }
 
   display.setFont(&DejaVu_Sans_Bold_11);
 }
@@ -594,7 +567,6 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
 
   arrow(x + offset, y + offset, radius - 11, angle, 15, 22, GxEPD_RED); // Show wind direction on outer circle of width and length
   display.setTextSize(0);
-  display.drawRect(x - radius, y - radius, 129, 128, GxEPD_BLACK);
   
   display.drawCircle(x + offset, y + offset, radius, GxEPD_BLACK); // Draw compass circle
   display.drawCircle(x + offset, y + offset, radius + 1, GxEPD_BLACK); // Draw compass circle
@@ -603,9 +575,9 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
     dxo = radius * cos((a - 90) * PI / 180);
     dyo = radius * sin((a - 90) * PI / 180);
     if (a == 45)  drawString(dxo + x + 10 + offset, dyo + y - 10 + offset, "NE", CENTER);
-    if (a == 135) drawString(dxo + x + 5 + offset, dyo + y + 5 + offset,   "SE", CENTER);
-    if (a == 225) drawString(dxo + x - 10 + offset, dyo + y + offset,    "SW", CENTER);
-    if (a == 315) drawString(dxo + x - 10 + offset, dyo + y - 10 + offset, "NW", CENTER);
+    if (a == 135) drawString(dxo + x + 12 + offset, dyo + y + offset,   "SE", CENTER);
+    if (a == 225) drawString(dxo + x - 16 + offset, dyo + y + offset,    "SW", CENTER);
+    if (a == 315) drawString(dxo + x - 12 + offset, dyo + y - 10 + offset, "NW", CENTER);
     dxi = dxo * 0.9;
     dyi = dyo * 0.9;
     display.drawLine(dxo + x + offset, dyo + y + offset, dxi + x + offset, dyi + y + offset, GxEPD_BLACK);
@@ -620,22 +592,17 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
   drawString(x + offset, y - radius - 11 + offset, "N", CENTER);
   display.setTextColor(GxEPD_BLACK);
 
-  drawString(x + offset, y + 3 + offset + radius, "S", CENTER);
-  drawString(x - radius - 8 + offset, y - 5 + offset, "W", CENTER);
-  drawString(x + radius + offset + 7, y - 3 + offset, "E", CENTER);
+  drawString(x + offset, y + 4 + offset + radius, "S", CENTER);
+  drawString(x - radius - 10 + offset, y - 3 + offset, "W", CENTER);
+  drawString(x + radius + offset + 7, y - 4 + offset, "E", CENTER);
 
-  drawString(x + offset, y - 23 + offset, windDegToDirection(angle), CENTER);
-
-
-  drawString(x + offset, y - 6 + offset, String(windspeed, 1), CENTER);
+  drawString(x + offset, y - 16 + offset, String(windspeed, 1), CENTER);
 
   display.setFont();  // use default 6x8 font
-  drawString(x + offset, y - 5 + offset, "mph", CENTER);
+  drawString(x + offset + 3, y - 15 + offset, "mph", CENTER);
 
   display.setFont(&DejaVu_Sans_Bold_11);
-  drawString(x + offset, y + 16 + offset, String(angle, 0) +  "'", CENTER);
-
-
+  drawString(x + offset, y + 10 + offset, String(angle, 0) +  "'", CENTER);
 }
 
 void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour) {
@@ -745,24 +712,18 @@ void displayWeatherForecast(int x, int y) {
   }
 
   float temp [forecast_counter] = {0};
-  float feels [forecast_counter] = {0};
-  float cloudcover [forecast_counter] = {0};
-  float rain [forecast_counter] = {0};
   float pressure [forecast_counter] = {0};
 
   for(byte i = 0; i < forecast_counter; i++ )
   {
-    temp[i] = forecast[i].temperature;
-    feels[i] = forecast[i].feels_like;
-    cloudcover[i] = forecast[i].humidity;
+    temp[i] = forecast[i].temperature;  
     pressure[i] = forecast[i].pressure;
-    rain[i] = forecast[i].rain;
   }
 
   //(x, y, w, h, Data[], Range, len, title)
-  drawSingleGraph(30, 205, 95, 75, pressure, forecast_counter, "Pressure (hPa)");
-  drawSingleGraph(163, 205, 95, 75, temp, forecast_counter, "Temperature");
-  drawSingleGraph(297, 205, 95, 75, rain, forecast_counter, "Rainfall (mm)");
+  drawSingleGraph(155, 205, 96, 75, temp, forecast_counter, "Temperature");
+  drawSingleGraph(295, 205, 96, 75, pressure, forecast_counter, "Pressure (hPa)");
+  // drawSingleGraph(297, 205, 95, 75, rain, forecast_counter, "Rainfall (mm)");
 }
 
 void displaySingleForecast(int x, int y, int offset, int index) {
@@ -1168,23 +1129,23 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
   }
 }
 
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour) {
-  display.setFont(&DSEG7_Classic_Bold_21);
-  drawString(x - 35, y - 95, String(pressure, 0), LEFT);    // metric
-  display.setFont(&DejaVu_Sans_Bold_11);
-  drawString(x + 36, y - 90, "hPa", LEFT);
-  if (slope == LEVEL) {
-    display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, colour); // Steady
-  }
+// void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour) {
+//   display.setFont(&DSEG7_Classic_Bold_21);
+//   drawString(x - 35, y - 95, String(pressure, 0), LEFT);    // metric
+//   display.setFont(&DejaVu_Sans_Bold_11);
+//   drawString(x + 36, y - 90, "hPa", LEFT);
+//   if (slope == LEVEL) {
+//     display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, colour); // Steady
+//   }
 
-  if (slope == DOWN) {
-    display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, colour); // Falling
-  }
+//   if (slope == DOWN) {
+//     display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, colour); // Falling
+//   }
 
-  if (slope == UP) {
-    display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, colour); // Rising
-  }
-}
+//   if (slope == UP) {
+//     display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, colour); // Rising
+//   }
+// }
 
 void displayRain(int x, int y) {
   if (forecast[1].rain > 0) {
@@ -1856,6 +1817,7 @@ void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[
       y1 = y+h-1;
     }
 
+    // Draw data on display
     for (int i = 1; i < len; i++ ) 
     {
       x2 = x + i * w / (len-1) - 1;
@@ -1863,8 +1825,7 @@ void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[
       if(y2 > y+h-1) {
         y2 = y+h-1;
       }
-
-      // TODO: Stop solid line at bottom of rainfall graph when no rain!
+      // More solid line using 2 lines 1 pixel apart.
       display.drawLine(x1, y1-1, x2, y2-1, GxEPD_BLACK);
       display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
 
@@ -1873,16 +1834,17 @@ void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[
     }
 
     // x-Axis ticks
-    struct tm *lt;
-    char buff[32];
-    for (int i = 0; i <= 4; i++) {
-      display.setCursor(x-7+(w/4)*i ,y+h+6);
-      if ((12 * i) == 24) {   // day 1
-        display.print("1d");
+    for (int i = 0; i <= 6; i++) {
+      display.setCursor(x-7+(w/6)*i ,y+h+6);
+      //display.print(String(12*i)+"h");
+      if (i == 0) {   // day 0 (now)
+        display.print("0");
+      } else if ((12 * i) == 24) {   // day 1
+        display.print("24");
       } else if ((12 * i) == 48) {  // day 2
-        display.print("2d");
+        display.print("48");
       } else if ((12 * i) == 72) {  // day 3
-        display.print("2d");
+        display.print("72");
       }
     }
 
