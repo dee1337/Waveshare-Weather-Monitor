@@ -481,6 +481,7 @@ void displayInformation(bool today_flag, bool forecast_flag) {
   display.firstPage();
   do {
     displayHeader();
+    weather.icon = "01d";
     displayWeatherIcon(120, -15, weather.icon, large_icon); // Weather icon
     displayWeatherDescription(185, 90);                    // Description of the weather now
     displayTemperature(270, 0);
