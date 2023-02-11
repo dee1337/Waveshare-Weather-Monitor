@@ -17,3 +17,6 @@ Version 1 display.
 
 Version 2 display.
 ![alt text width="500"](/pictures/v2.jpg)
+
+Version 3 display.
+![alt text width="500"](/pictures/v3.jpg)
