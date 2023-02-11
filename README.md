@@ -13,7 +13,7 @@ This project was written using Visual Studio Code and the PlatformIO extension.
 Libraries used: GxEPD2, ArduinoJson.
 
 Version 1 display.
-![alt text width="600"](/pictures/v1.jpg)
+![alt text width="500"](/pictures/v1.jpg)
 
 Version 2 display.
-![alt text width="600"](/pictures/v2.jpg)
+![alt text width="500"](/pictures/v2.jpg)

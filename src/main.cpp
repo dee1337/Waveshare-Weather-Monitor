@@ -22,12 +22,12 @@
 
 #include <Fonts/FreeMonoBold12pt7b.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
-#include <Fonts/FreeMonoBold18pt7b.h>
 #include "config.h"
 #include "fonts.h"
 #include "arrow.h"
 #include "sunrise.h"
 #include "sunset.h"
+#include "OpenSans_Regular24pt7b.h"
 
 /* Constants/defines */
 const uint SCREEN_WIDTH = 400;
@@ -154,8 +154,8 @@ typedef struct WeatherStruct {
 WeatherStruct weather;
 WeatherStruct forecast[forecast_counter];
 
-char timeStringBuff[35]; // buffer for time on the display
-char dateStringBuff[35];
+char timeStringBuff[7]; // buffer for time on the display
+char dateStringBuff[4];
 char dayStringBuff[10];
 
 void setup() {
@@ -264,7 +264,7 @@ static void updateLocalTime(void)
     }
 
     // Update buffer with current time/date
-    strftime(dateStringBuff, sizeof(dateStringBuff), "%d", &timeinfo);    // Sat 15-Jan-23
+    strftime(dateStringBuff, sizeof(dateStringBuff), "%e", &timeinfo);    // 1-9. 10-31
     strftime(dayStringBuff, sizeof(dayStringBuff), "%A", &timeinfo);      // Saturday
     strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo); // 15:15
 }
@@ -480,7 +480,7 @@ void displayInformation(bool today_flag, bool forecast_flag)
         displayWind(48, 225, weather.wind_deg, weather.wind_speed, 44); // Wind direction info
         displayWeatherForecast(118, 115);                               // Forecast
 
-        displaySunAndMoon(0, 120); // Sunset and sunrise and moon state with icons
+        displaySunAndMoon(0, 115); // Sunset and sunrise and moon state with icons
     } while (display.nextPage());
 
     display.hibernate();
@@ -491,22 +491,22 @@ void displayInformation(bool today_flag, bool forecast_flag)
 }
 
 void displayHeader(void) {
-    display.fillRect(0, 0, 120, 120, GxEPD_BLACK);
+    display.fillRect(0, 0, 120, 114, GxEPD_BLACK);
     display.setTextColor(GxEPD_WHITE);
 
     display.setFont();
-    drawString(3, -6, VERSION, LEFT);
-    drawString(45, -6, timeStringBuff, CENTER);
+    drawString(3, -5, VERSION, LEFT);
+    drawString(45, -5, timeStringBuff, CENTER);
 
-    drawString(117, -6, String(rssi) + "dBm", RIGHT);
+    drawString(117, -5, String(rssi) + "dBm", RIGHT);
 
-    display.setFont(&DSEG7_Classic_Bold_21);
-    display.setTextSize(2);
-    drawString(24, 30, dateStringBuff, LEFT);
+    display.setFont(&OpenSans_Regular24pt7b);
+    display.setTextSize(1);
+    drawString(55, 31, dateStringBuff, CENTER);
 
     display.setTextSize(0);
     display.setFont(&FreeMonoBold9pt7b);
-    drawString(60, 92, dayStringBuff, CENTER);
+    drawString(60, 85, dayStringBuff, CENTER);
     display.setTextColor(GxEPD_BLACK);
     display.setFont(&DejaVu_Sans_Bold_11);
 }
@@ -534,13 +534,16 @@ void displayTemperature(int x, int y) {
         drawString(x + 35, y + 2, String(fabs(weather.temperature), 0), LEFT); // Show current Temperature without a '-' minus sign
         display.setTextSize(1);
         drawString(x + 77, y + 10, "'", LEFT); // Add-in ° symbol ' in this font
-    }
-    else if (weather.temperature < 10) {
-        drawString(x + 25, y + 2, String(fabs(weather.temperature), 0), LEFT); // Show current Temperature without a '-' minus sign
+    } else if (weather.temperature < 10) {
+        drawString(x + 25, y + 2, String(fabs(weather.temperature), 0), LEFT); 
         display.setTextSize(1);
         drawString(x + 67, y + 10, "'", LEFT); // Add-in ° symbol ' in this font
+    } else if (weather.temperature < 20) {
+        drawString(x + 9, y + 5, String(fabs(weather.temperature), 0), LEFT); 
+        display.setTextSize(1);
+        drawString(x + 77, y + 11, "'", LEFT); // Add-in ° symbol ' in this font
     } else {
-        drawString(x + 15, y + 2, String(fabs(weather.temperature), 0), LEFT); // Show current Temperature without a '-' minus sign
+        drawString(x + 15, y + 2, String(fabs(weather.temperature), 0), LEFT); 
         display.setTextSize(1);
         drawString(x + 82, y + 8, "'", LEFT); // Add-in ° symbol ' in this font
     }
@@ -734,10 +737,10 @@ void displaySunAndMoon(int x, int y) {
     const int year_utc = now_utc->tm_year + 1900;
 
     sunRiseSetIcon(x + 20, y + 20, SUN_UP);
-    sunRiseSetIcon(x + 20, y + 45, SUN_DOWN);
+    sunRiseSetIcon(x + 20, y + 47, SUN_DOWN);
 
     drawString(x + 40, y + 15, convertUnixTime(weather.sunrise).substring(0, 8), LEFT); // 08:00 AM
-    drawString(x + 40, y + 40, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
+    drawString(x + 40, y + 42, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
 }
 
 void displayWeatherForecast(int x, int y) {
