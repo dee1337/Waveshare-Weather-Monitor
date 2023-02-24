@@ -7,14 +7,22 @@
  *
  * v1: Near copy of project by G6EJD.
  * v2: Modify display to remove weather person and re-arrange information.
- *
- * This is a copy/update of the weather display written by G6EJD:
- *  https://github.com/G6EJD/ESP32-Revised-Weather-Display-42-E-Paper
+ * v3: Yet another different display setup.
+ * 
+ * v3.1: Version using Lilygo ESP32S3 T7-S3
+ * Waveshare        ESP32S3
+ *   DIN               11 (SPI MOSI)
+ *   CLK               12 (SPI SCK)
+ *   CS                10 (SPI chip selection)
+ *   DC                18
+ *   RST               16
+ *   BUSY              15
  */
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "esp_adc_cal.h"
 
 #include "GxEPD2_GFX.h"
 #include "GxEPD2_3C.h"                          // 3 colour screen
@@ -29,10 +37,20 @@
 #include "sunset.h"
 #include "OpenSans_Regular24pt7b.h"
 
+// CaptureLog setup
+#define CLOG_ENABLE true                        // this must be defined before cLog.h is included 
+#include "cLog.h"
+
+#if CLOG_ENABLE
+const uint16_t maxEntries = 20;
+const uint16_t maxEntryChars = 50;
+CLOG_NEW myLog1(maxEntries, maxEntryChars, NO_TRIGGER, NO_WRAP);
+#endif
+
 /* Constants/defines */
 const uint SCREEN_WIDTH = 400;
 const uint SCREEN_HEIGHT = 300;
-const String VERSION = "v3";
+const String VERSION = "v3.1";
 const String Hemisphere = "north";
 const int forecast_counter = 16; // Number of forecasts to get/show.
 
@@ -42,6 +60,13 @@ const int wakeup_hour = 7;      // Stop power saving at 07:00
 
 #define LARGE 10
 #define SMALL 4
+
+// Battery voltage and T7-S3 LED
+#define LED_PIN 17
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define BAT_ADC        2
+
+float battery_voltage = 0.0;
 
 boolean large_icon = true;
 boolean small_icon = false;
@@ -68,6 +93,7 @@ bool getWeatherForecast(void);
 bool getDailyWeatherForecast(void);
 static void updateLocalTime(void);
 void initialiseDisplay(void);
+uint32_t readADC_Cal(int adc_raw);
 void goToSleep(void);
 void displayErrorMessage(String message);
 void displaySystemInfo(int x, int y);
@@ -159,18 +185,22 @@ char dateStringBuff[4];
 char dayStringBuff[10];
 
 void setup() {
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+    
     Serial.begin(115200);
+    delay(5000); // delay for serial to begin!
 
     initialiseDisplay();
 
-    // Serial.println("\n##################################");
-    // Serial.println(F("ESP32 Information:"));
-    // Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n", ESP.getHeapSize(), ESP.getHeapSize()-ESP.getFreeHeap(), ESP.getFreeHeap());
-    // Serial.printf("Sketch Size %d, Free Sketch Space %d\n", ESP.getSketchSize(), ESP.getFreeSketchSpace());
-    // Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n", ESP.getPsramSize(), ESP.getFreePsram());
-    // Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
-    // Serial.printf("Flash Size %d, Flash Speed %d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
-    // Serial.println("##################################\n");
+    Serial.println("\n##################################");
+    Serial.println(F("ESP32 Information:"));
+    Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n", ESP.getHeapSize(), ESP.getHeapSize()-ESP.getFreeHeap(), ESP.getFreeHeap());
+    Serial.printf("Sketch Size %d, Free Sketch Space %d\n", ESP.getSketchSize(), ESP.getFreeSketchSpace());
+    Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n", ESP.getPsramSize(), ESP.getFreePsram());
+    Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
+    Serial.printf("Flash Size %d, Flash Speed %d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
+    Serial.println("##################################\n");
 
     WiFi.disconnect();
 
@@ -183,17 +213,22 @@ void setup() {
         delay(500);
         Serial.print(".");
     }
+    
     Serial.println("");
     Serial.println("Connecting to Wi-Fi...");
+
     ipAddress = WiFi.localIP().toString();
     rssi = WiFi.RSSI();
     Serial.println(ipAddress);
+    CLOG(myLog1.add(), "IP Address: %s", ipAddress);
 
-    Serial.println("Connecting to NTP Time Server...");
+    //Serial.println("Connecting to NTP Time Server...");
     configTime(0, 3600, SNTP_TIME_SERVER);
     updateLocalTime();
 
-    Serial.println("All set up, display some information...");
+    //Serial.println("All set up, display some information...");
+    CLOG(myLog1.add(), "Setup complete...");
+
     bool today_flag = getTodaysWeather();
     bool forecast_flag = getWeatherForecast();
 
@@ -201,16 +236,29 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
+    battery_voltage = round(readADC_Cal(analogRead(BAT_ADC)) * 2);
+    Serial.printf("Battery Voltage %.2fV\n", battery_voltage / 1000.0); // Print Voltage (in V)
+
     if (today_flag == true && forecast_flag == true)
     {
+        CLOG(myLog1.add(), "All data retrieved successfully.");
         displayInformation(today_flag, forecast_flag);
     }
     else
     {
+        CLOG(myLog1.add(), "Unable to retrieve data!");
         displayErrorMessage("Unable to retrieve data, contact support!");
     }
 
     goToSleep();
+}
+
+uint32_t readADC_Cal(int adc_raw)
+{
+    esp_adc_cal_characteristics_t adc_chars;
+
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+    return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
 }
 
 void goToSleep(void) {
@@ -242,7 +290,17 @@ void goToSleep(void) {
     }
     esp_sleep_enable_timer_wakeup(sleep_timer * 1000000LL);
 
-    Serial.println("Off to deep-sleep for " + String(sleep_timer) + " seconds");
+    CLOG(myLog1.add(), "Off to deep-sleep for %ld minutes", sleep_timer/60);
+    //Serial.println("Off to deep-sleep for " + String(sleep_timer) + " seconds");
+
+    #if CLOG_ENABLE
+    Serial.println("");
+    Serial.println("## This is myLog1 ##");
+    for (uint16_t i = 0; i < myLog1.numEntries; i++) {
+        Serial.println(myLog1.get(i));
+    }
+    delay(5000);  // serial output seems to be slow!
+    #endif
 
     esp_deep_sleep_start();
 }
@@ -259,7 +317,8 @@ static void updateLocalTime(void)
 {
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) {
-        Serial.println("Failed to obtain time");
+        //Serial.println("Failed to obtain time");
+        CLOG(myLog1.add(), "Failed to obtain time");
         return;
     }
 
@@ -281,7 +340,8 @@ bool getTodaysWeather(void)
     client.setInsecure(); // certificate is not checked
 
     if (!client.connect(host, port)) {
-        Serial.println("HTTPS connection to OpenWeatherMap failed!");
+        //Serial.println("HTTPS connection to OpenWeatherMap failed!");
+        CLOG(myLog1.add(), "HTTPS[1] connection to OpenWeatherMap failed!");
         return false;
     }
 
@@ -289,41 +349,42 @@ bool getTodaysWeather(void)
     char c = 0;
 
     // Send GET request
-    Serial.printf("Sending GET request to %s, port %d\n", host, port);
+//    Serial.printf("Sending GET request to %s, port %d\n", host, port);
     client.print(String("GET ") + WEATHER_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
     while (client.connected()) {
         String line = client.readStringUntil('\n');
         if (line == "\r") {
-            Serial.println("Header end found.");
+            //Serial.println("Header end found.");
             break;
         }
 
         Serial.println(line);
 
         if ((millis() - timeout) > 5000UL) {
-            Serial.println("HTTP header timeout");
+            //Serial.println("HTTP header timeout");
             client.stop();
             return false;
         }
     }
 
     //  Serial.print("JSON length: "); Serial.println(client.available());
-    Serial.println("Parsing JSON...");
+    //Serial.println("Parsing JSON...");
 
     // bool decode = false;
     DynamicJsonDocument doc(20 * 1024);
 
-    Serial.println("Deserialization process starting...");
+    //Serial.println("Deserialization process starting...");
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
     if (err) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(err.c_str());
+        // Serial.print("deserializeJson() failed: ");
+        // Serial.println(err.c_str());
+        CLOG(myLog1.add(), "deserializeJson(1) failed: %s", err.c_str());
         retcode = false;
     }
     else {
-        Serial.print(F("Deserialization succeeded, decoding data..."));
+        //Serial.print(F("Deserialization succeeded, decoding data..."));
 
         weather.main = doc["weather"][0]["main"].as<String>();
         weather.description = doc["weather"][0]["description"].as<String>();
@@ -342,9 +403,10 @@ bool getTodaysWeather(void)
         weather.visibility = doc["visibility"];
         weather.clouds = doc["clouds"]["all"];
 
-        Serial.print("\nDone in ");
-        Serial.print(millis() - dt);
-        Serial.println(" ms");
+        // Serial.print("\nDone in ");
+        // Serial.print(millis() - dt);
+        // Serial.println(" ms");
+        CLOG(myLog1.add(), "Deserialized today's weather in %ld ms", millis() - dt);
     }
 
     client.stop();
@@ -364,7 +426,9 @@ bool getWeatherForecast(void)
     client.setInsecure(); // certificate is not checked
 
     if (!client.connect(host, port)) {
-        Serial.println("HTTPS connection to OpenWeatherMap failed!");
+        //Serial.println("HTTPS connection to OpenWeatherMap failed!");
+        CLOG(myLog1.add(), "HTTPS[2] connection to OpenWeatherMap failed!");
+
         return false;
     }
 
@@ -372,38 +436,40 @@ bool getWeatherForecast(void)
     char c = 0;
 
     // Send GET request
-    Serial.printf("Sending GET request to %s, port %d\n", host, port);
+    //Serial.printf("Sending GET request to %s, port %d\n", host, port);
     client.print(String("GET ") + FORECAST_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
     while (client.connected()) {
         String line = client.readStringUntil('\n');
         if (line == "\r") {
-            Serial.println("Header end found.");
+            //Serial.println("Header end found.");
             break;
         }
 
         if ((millis() - timeout) > 5000UL) {
-            Serial.println("HTTP header timeout");
+            //Serial.println("HTTP header timeout");
             client.stop();
             return false;
         }
     }
 
-    Serial.println("Parsing Forecast JSON...");
+    //Serial.println("Parsing Forecast JSON...");
 
     DynamicJsonDocument doc(24 * 1024);
 
-    Serial.println("Deserialization process starting...");
+    //Serial.println("Deserialization process starting...");
 
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
     if (err) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(err.c_str());
+        // Serial.print("deserializeJson() failed: ");
+        // Serial.println(err.c_str());
+        CLOG(myLog1.add(), "deserializeJson(2) failed: %s", err.c_str());
+
         retcode = false;
     }
     else {
-        Serial.println(F("Deserialization succeeded, decoding forecast data..."));
+        //Serial.println(F("Deserialization succeeded, decoding forecast data..."));
 
         for (byte i = 0; i < forecast_counter; i++) {
             forecast[i].dt = doc["list"][i]["dt"];
@@ -424,10 +490,11 @@ bool getWeatherForecast(void)
             forecast[i].period = doc["list"][i]["dt_txt"].as<String>();
         }
 
-        Serial.println("##Still need to check on rainfall and snowfall returns!##");
-        Serial.print("\nDone in ");
-        Serial.print(millis() - dt);
-        Serial.println(" ms");
+        //Serial.println("##Still need to check on rainfall and snowfall returns!##");
+        CLOG(myLog1.add(), "Deserialized [%d] forecasts in %ld ms", forecast_counter, millis() - dt);
+        // Serial.print("\nDone in ");
+        // Serial.print(millis() - dt);
+        // Serial.println(" ms");
     }
 
     client.stop();
@@ -485,9 +552,10 @@ void displayInformation(bool today_flag, bool forecast_flag)
 
     display.hibernate();
 
-    Serial.print("\nDisplay updated in ");
-    Serial.print((millis() - dt) / 1000);
-    Serial.println(" secs");
+    // Serial.print("\nDisplay updated in ");
+    // Serial.print((millis() - dt) / 1000);
+    // Serial.println(" secs");
+    CLOG(myLog1.add(), "Display updated in %ld seconds", (millis() - dt) / 1000);
 }
 
 void displayHeader(void) {
@@ -495,8 +563,8 @@ void displayHeader(void) {
     display.setTextColor(GxEPD_WHITE);
 
     display.setFont();
-    drawString(3, -5, VERSION, LEFT);
-    drawString(45, -5, timeStringBuff, CENTER);
+    drawString(3, -5, String(battery_voltage / 1000.0) + "V", LEFT);
+    drawString(55, -5, timeStringBuff, CENTER);
 
     drawString(117, -5, String(rssi) + "dBm", RIGHT);
 
