@@ -185,12 +185,13 @@ char dateStringBuff[4];
 char dayStringBuff[10];
 
 void setup() {
+	// Ensure power LED is off to save power.
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
     
     #if CLOG_ENABLE
     Serial.begin(115200);
-    delay(5000); // delay for serial to begin!
+    delay(5000); // delay for serial to begin, T7-S3 is very slow to start serial output!
     #endif
 
     initialiseDisplay();
@@ -238,8 +239,8 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
-    #if CLOG_ENABLE
     battery_voltage = round(readADC_Cal(analogRead(BAT_ADC)) * 2);
+    #if CLOG_ENABLE
     CLOG(myLog1.add(), "Battery: %.2fV", battery_voltage / 1000.0);
    // Serial.printf("Battery Voltage %.2fV\n", battery_voltage / 1000.0); // Print Voltage (in V)
     #endif
