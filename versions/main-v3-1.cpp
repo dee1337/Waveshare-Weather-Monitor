@@ -95,10 +95,11 @@ static void updateLocalTime(void);
 void initialiseDisplay(void);
 uint32_t readADC_Cal(int adc_raw);
 void goToSleep(void);
+void logWakeupReason(void);
 void displayErrorMessage(String message);
 void displaySystemInfo(int x, int y);
 void drawString(int x, int y, String text, alignment align);
-void displayInformation(bool today_flag, bool forecast_flag);
+void displayInformation(void);
 void displayTemperature(int x, int y);
 void displayCloudCover(int x, int y, int cover);
 void addCloud(int x, int y, int scale, int linesize);
@@ -192,6 +193,8 @@ void setup() {
     #if CLOG_ENABLE
     Serial.begin(115200);
     delay(5000); // delay for serial to begin, T7-S3 is very slow to start serial output!
+	
+	logWakeupReason();
     #endif
 
     initialiseDisplay();
@@ -248,7 +251,7 @@ void setup() {
     if (today_flag == true && forecast_flag == true)
     {
         CLOG(myLog1.add(), "All data retrieved successfully.");
-        displayInformation(today_flag, forecast_flag);
+        displayInformation();
     }
     else
     {
@@ -319,6 +322,24 @@ void loop() {
     }
 }
 
+/**
+ * @brief Log (cLog) why we've woken up.
+ * 
+ */
+void logWakeupReason(void) {
+    esp_sleep_wakeup_cause_t wakeup_reason;
+
+    wakeup_reason = esp_sleep_get_wakeup_cause();
+
+    switch (wakeup_reason) {
+    case ESP_SLEEP_WAKEUP_EXT0 : CLOG(myLog1.add(), "Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : CLOG(myLog1.add(), "Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : CLOG(myLog1.add(), "Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : CLOG(myLog1.add(), "Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : CLOG(myLog1.add(), "Wakeup caused by ULP program"); break;
+    default : CLOG(myLog1.add(), "Wakeup was not caused by deep sleep: %d\n", wakeup_reason); break;
+    }
+}
 static void updateLocalTime(void)
 {
     struct tm timeinfo;
@@ -534,7 +555,7 @@ void displayErrorMessage(String message) {
     display.hibernate();
 }
 
-void displayInformation(bool today_flag, bool forecast_flag)
+void displayInformation(void)
 {
     uint32_t dt = millis();
 
