@@ -1178,7 +1178,7 @@ void displayWeatherForecast(int x, int y)
 }
 
 /**
- * @brief Display a single forcast
+ * @brief Display a single 3 hourly forcast
  * 
  * @param x Display x coordinates
  * @param y Display y coordinates
@@ -1661,14 +1661,14 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon)
             display.fillRect(x + 5, y, 124, 128, GxEPD_BLACK);
             display.setTextColor(GxEPD_WHITE); // invert for night time
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_WHITE);
-            displayRain(x + 60, y + 115);
+            displayRain(x + 70, y + 115);
             display.setTextColor(GxEPD_BLACK); // reset colour
         }
         else
         {
             display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_BLACK);
-            displayRain(x + 60, y + 115);
+            displayRain(x + 70, y + 115);
         }
         x = x + 65;
         y = y + 65;
@@ -2008,7 +2008,6 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-
 void rainIcon(int x, int y, bool large_size, String icon_name)
 {
     int scale = SMALL;

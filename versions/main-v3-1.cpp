@@ -58,12 +58,14 @@ const long sleep_duration = 30; // Number of minutes to go to sleep for
 const int sleep_hour = 22;      // Start power saving at 23:00
 const int wakeup_hour = 7;      // Stop power saving at 07:00
 
+const float LOW_BATTERY_VOLTAGE = 3.30; // warn user battery low!
+
 #define LARGE 10
 #define SMALL 4
 
 // Battery voltage and T7-S3 LED
 #define LED_PIN 17
-#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+//#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 #define BAT_ADC        2
 
 float battery_voltage = 0.0;
@@ -95,6 +97,8 @@ static void updateLocalTime(void);
 void initialiseDisplay(void);
 uint32_t readADC_Cal(int adc_raw);
 void goToSleep(void);
+void displayBattery(int x, int y);
+int calculateBatteryPercentage(double v);
 void logWakeupReason(void);
 void displayErrorMessage(String message);
 void displaySystemInfo(int x, int y);
@@ -107,17 +111,11 @@ void displayHeader(void);
 void displayWind(int x, int y, float angle, float windspeed, int radius);
 void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour);
 String windDegToDirection(float winddirection);
-void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alignment align);
 String titleCase(String text);
 void displayWeatherDescription(int x, int y);
-void displayMoonPhase(int x, int y);
-void displayRain(int x, int y);
 String convertUnixTime(uint32_t unix_time);
-double normalizedMoonPhase(int d, int m, int y);
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface);
 void displaySunAndMoon(int x, int y);
-void moonPhase(int x, int y, int day, int month, int year, String hemisphere);
-int julianDate(int d, int m, int y);
+//int julianDate(int d, int m, int y);
 void displayWeatherForecast(int x, int y);
 void displaySingleForecast(int x, int y, int offset, int index);
 void displayWeatherIcon(int x, int y, String icon, bool icon_size);
@@ -242,11 +240,7 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
-    battery_voltage = round(readADC_Cal(analogRead(BAT_ADC)) * 2);
-    #if CLOG_ENABLE
-    CLOG(myLog1.add(), "Battery: %.2fV", battery_voltage / 1000.0);
-   // Serial.printf("Battery Voltage %.2fV\n", battery_voltage / 1000.0); // Print Voltage (in V)
-    #endif
+    battery_voltage = (round(readADC_Cal(analogRead(BAT_ADC)) * 2)) / 1000;
 
     if (today_flag == true && forecast_flag == true)
     {
@@ -255,6 +249,7 @@ void setup() {
     }
     else
     {
+        CLOG(myLog1.add(), "Battery: %.2fV", battery_voltage);
         CLOG(myLog1.add(), "Unable to retrieve data!");
         displayErrorMessage("Unable to retrieve data, contact support!");
     }
@@ -262,6 +257,25 @@ void setup() {
     goToSleep();
 }
 
+/**
+ * @brief Main loop which we will never enter as we enter deep sleep once we've updated
+ * the display.
+ * 
+ */
+void loop() {
+    while (true) {
+        /*
+         * Should never get here - using deep sleep
+         */
+    }
+}
+
+/**
+ * @brief Get the battery voltage
+ * 
+ * @param adc_raw Raw battery voltage from an adc read.
+ * @return uint32_t Battery voltage, e.g. 3999.0
+ */
 uint32_t readADC_Cal(int adc_raw)
 {
     esp_adc_cal_characteristics_t adc_chars;
@@ -270,6 +284,10 @@ uint32_t readADC_Cal(int adc_raw)
     return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
 }
 
+/**
+ * @brief Put the chip to sleep
+ * 
+ */
 void goToSleep(void) {
     long sleep_timer = sleep_duration * 60;
 
@@ -300,7 +318,6 @@ void goToSleep(void) {
     esp_sleep_enable_timer_wakeup(sleep_timer * 1000000LL);
 
     CLOG(myLog1.add(), "Off to deep-sleep for %ld minutes", sleep_timer/60);
-    //Serial.println("Off to deep-sleep for " + String(sleep_timer) + " seconds");
 
     #if CLOG_ENABLE
     Serial.println("");
@@ -308,18 +325,10 @@ void goToSleep(void) {
     for (uint16_t i = 0; i < myLog1.numEntries; i++) {
         Serial.println(myLog1.get(i));
     }
-    delay(5000);  // serial output seems to be slow!
+    delay(3000);  // serial output seems to be slow!
     #endif
 
     esp_deep_sleep_start();
-}
-
-void loop() {
-    while (true) {
-        /*
-         * Should never get here - using deep sleep
-         */
-    }
 }
 
 /**
@@ -340,6 +349,11 @@ void logWakeupReason(void) {
     default : CLOG(myLog1.add(), "Wakeup was not caused by deep sleep: %d\n", wakeup_reason); break;
     }
 }
+
+/**
+ * @brief Update global buffers with various times/date values.
+ * 
+ */
 static void updateLocalTime(void)
 {
     struct tm timeinfo;
@@ -355,6 +369,12 @@ static void updateLocalTime(void)
     strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo); // 15:15
 }
 
+/**
+ * @brief Get the Todays Weather from openweathermaps.org
+ * 
+ * @return true If we successfully retrieved the weather
+ * @return false If we failed to retrieve the weather
+ */
 bool getTodaysWeather(void)
 {
     WiFiClientSecure client;
@@ -367,7 +387,6 @@ bool getTodaysWeather(void)
     client.setInsecure(); // certificate is not checked
 
     if (!client.connect(host, port)) {
-        //Serial.println("HTTPS connection to OpenWeatherMap failed!");
         CLOG(myLog1.add(), "HTTPS[1] connection to OpenWeatherMap failed!");
         return false;
     }
@@ -376,7 +395,6 @@ bool getTodaysWeather(void)
     char c = 0;
 
     // Send GET request
-//    Serial.printf("Sending GET request to %s, port %d\n", host, port);
     client.print(String("GET ") + WEATHER_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
     while (client.connected()) {
@@ -395,24 +413,22 @@ bool getTodaysWeather(void)
         }
     }
 
-    //  Serial.print("JSON length: "); Serial.println(client.available());
+    //Serial.print("JSON length: "); Serial.println(client.available());
     //Serial.println("Parsing JSON...");
 
     // bool decode = false;
     DynamicJsonDocument doc(20 * 1024);
 
     //Serial.println("Deserialization process starting...");
+
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
     if (err) {
-        // Serial.print("deserializeJson() failed: ");
-        // Serial.println(err.c_str());
+
         CLOG(myLog1.add(), "deserializeJson(1) failed: %s", err.c_str());
         retcode = false;
     }
     else {
-        //Serial.print(F("Deserialization succeeded, decoding data..."));
-
         weather.main = doc["weather"][0]["main"].as<String>();
         weather.description = doc["weather"][0]["description"].as<String>();
         weather.icon = doc["weather"][0]["icon"].as<String>();
@@ -430,9 +446,6 @@ bool getTodaysWeather(void)
         weather.visibility = doc["visibility"];
         weather.clouds = doc["clouds"]["all"];
 
-        // Serial.print("\nDone in ");
-        // Serial.print(millis() - dt);
-        // Serial.println(" ms");
         CLOG(myLog1.add(), "Deserialized today's weather in %ld ms", millis() - dt);
     }
 
@@ -441,6 +454,13 @@ bool getTodaysWeather(void)
     return retcode;
 }
 
+/**
+ * @brief Get the Weather Forecast for the next 'n' readings. Readings are for every 3 hours
+ * and the number to retrieve is set in a global variable 'forecast_counter'.
+ * 
+ * @return true 
+ * @return false 
+ */
 bool getWeatherForecast(void)
 {
     WiFiClientSecure client;
@@ -453,7 +473,6 @@ bool getWeatherForecast(void)
     client.setInsecure(); // certificate is not checked
 
     if (!client.connect(host, port)) {
-        //Serial.println("HTTPS connection to OpenWeatherMap failed!");
         CLOG(myLog1.add(), "HTTPS[2] connection to OpenWeatherMap failed!");
 
         return false;
@@ -463,7 +482,6 @@ bool getWeatherForecast(void)
     char c = 0;
 
     // Send GET request
-    //Serial.printf("Sending GET request to %s, port %d\n", host, port);
     client.print(String("GET ") + FORECAST_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
     while (client.connected()) {
@@ -489,15 +507,11 @@ bool getWeatherForecast(void)
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
     if (err) {
-        // Serial.print("deserializeJson() failed: ");
-        // Serial.println(err.c_str());
         CLOG(myLog1.add(), "deserializeJson(2) failed: %s", err.c_str());
 
         retcode = false;
     }
     else {
-        //Serial.println(F("Deserialization succeeded, decoding forecast data..."));
-
         for (byte i = 0; i < forecast_counter; i++) {
             forecast[i].dt = doc["list"][i]["dt"];
             forecast[i].temperature = doc["list"][i]["main"]["temp"];
@@ -517,11 +531,7 @@ bool getWeatherForecast(void)
             forecast[i].period = doc["list"][i]["dt_txt"].as<String>();
         }
 
-        //Serial.println("##Still need to check on rainfall and snowfall returns!##");
         CLOG(myLog1.add(), "Deserialized [%d] forecasts in %ld ms", forecast_counter, millis() - dt);
-        // Serial.print("\nDone in ");
-        // Serial.print(millis() - dt);
-        // Serial.println(" ms");
     }
 
     client.stop();
@@ -529,6 +539,10 @@ bool getWeatherForecast(void)
     return retcode;
 }
 
+/**
+ * @brief Set up the display, serial connection, rotation, font, colour, and size.
+ * 
+ */
 void initialiseDisplay() {
     display.init(115200, true, 2, false); // USE THIS for Waveshare boards with "clever" reset circuit, 2ms reset pulse
     display.setRotation(0);
@@ -541,6 +555,11 @@ void initialiseDisplay() {
     delay(1000);
 }
 
+/**
+ * @brief Display an error message on the display to the user.
+ * 
+ * @param message Message to display
+ */
 void displayErrorMessage(String message) {
     display.setFullWindow();
     display.firstPage();
@@ -555,6 +574,11 @@ void displayErrorMessage(String message) {
     display.hibernate();
 }
 
+/**
+ * @brief Set up the display with all of the information we're going to show, e.g. temperature,
+ * forecast, sun rise and set times...
+ * 
+ */
 void displayInformation(void)
 {
     uint32_t dt = millis();
@@ -579,18 +603,22 @@ void displayInformation(void)
 
     display.hibernate();
 
-    // Serial.print("\nDisplay updated in ");
-    // Serial.print((millis() - dt) / 1000);
-    // Serial.println(" secs");
     CLOG(myLog1.add(), "Display updated in %ld seconds", (millis() - dt) / 1000);
 }
 
+/**
+ * @brief Display the header information;
+ * location of weather data, date, time of reading the weather, version.
+ * 
+ */
 void displayHeader(void) {
     display.fillRect(0, 0, 120, 114, GxEPD_BLACK);
     display.setTextColor(GxEPD_WHITE);
 
     display.setFont();
-    drawString(3, -5, String(battery_voltage / 1000.0) + "V", LEFT);
+
+    displayBattery(3, -5);
+    
     drawString(55, -5, timeStringBuff, CENTER);
 
     drawString(117, -5, String(rssi) + "dBm", RIGHT);
@@ -606,6 +634,12 @@ void displayHeader(void) {
     display.setFont(&DejaVu_Sans_Bold_11);
 }
 
+/**
+ * @brief Display the current temperature, cloud cover and humidity.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
 void displayTemperature(int x, int y) {
     display.setFont();
     drawString(x - 10, y, "Min", LEFT);
@@ -646,10 +680,23 @@ void displayTemperature(int x, int y) {
     display.setFont(&DejaVu_Sans_Bold_11);
 }
 
+/**
+ * @brief Current weather description as returned by openweathermap.org
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
 void displayWeatherDescription(int x, int y) {
     drawString(x, y, titleCase(weather.description), CENTER);
 }
 
+/**
+ * @brief Display system information which could include battery voltage, wi-fi signal
+ * strength and the IP address we've been assigned depending on screen space
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
 void displaySystemInfo(int x, int y) {
     int wifi_rssi = 0;
     int xpos = 1;
@@ -679,6 +726,79 @@ void displaySystemInfo(int x, int y) {
     drawString(x + 68, y + 45, WiFi.localIP().toString(), CENTER);
 }
 
+/**
+ * @brief Display the battery voltage and percentage - we need 3.3v to drive 
+ * the waveshare e-ink display so percentage will display 0% when we get that
+ * low even though the ESP32S3 is capable of being run at 2.2v.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
+void displayBattery(int x, int y) {
+    int percentage = 0;
+    int p = 0;
+    int colour = GxEPD_BLACK;
+
+    if (battery_voltage >= 3 ) { 
+        //p = 2836.9625 * pow(battery_voltage, 4) - 43987.4889 * pow(battery_voltage, 3) + 255233.8134 * pow(battery_voltage, 2) - 656689.7123 * battery_voltage + 632041.7303;
+        percentage = calculateBatteryPercentage(battery_voltage);
+        CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", battery_voltage, percentage);
+
+        if (battery_voltage <= LOW_BATTERY_VOLTAGE || percentage < 10) {
+            colour = GxEPD_RED;
+        }
+
+        // display.drawRect(x + 13, y + 3, 29, 10, GxEPD_BLACK);
+        // display.fillRect(x + 42, y + 5, 2, 5, GxEPD_BLACK);
+        // display.fillRect(x + 15, y + 5, 25 * percentage / 100.0, 6, colour);
+
+        // display.setTextColor(colour);
+        // drawString(x + 48, y + 4, String(percentage) + "%", LEFT);
+        // drawString(x - 35, y + 4,  String(battery_voltage, 2) + "v", LEFT);
+        drawString(x, y, String(battery_voltage) + "V", LEFT);
+    } 
+    else
+    {
+        CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", battery_voltage);
+        display.setTextColor(GxEPD_RED);
+        drawString(x, y, "!.!!V", LEFT);
+    }
+
+    // reset text colour to black
+    display.setTextColor(GxEPD_BLACK);
+}
+
+/**
+ * @brief Calculate the appromimate battery life percentage remaining. Returns a value 
+ * between 0-100% rounded to the nearest integer.
+ * 
+ * @param v Voltage reading of the battery.
+ * @return int Percentage remaining
+ */
+int calculateBatteryPercentage(double v)
+{
+  // this formula was calculated using samples collected from a lipo battery
+  double y = -  144.9390 * v * v * v
+             + 1655.8629 * v * v
+             - 6158.8520 * v
+             + 7501.3202;
+
+  // enforce bounds, 0-100
+  y = max(y, 0.0);
+  y = min(y, 100.0);
+  
+  y = round(y);
+  return static_cast<int>(y);
+} 
+
+/**
+ * @brief Display some small clouds and the percentage value of the cloud cover. 0% is
+ * no cloud cover, 100% is total cover.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param cover The percentage of the current cloud cover to display.
+ */
 void displayCloudCover(int x, int y, int cover) {
     addCloud(x, y, SMALL * 0.5, 1);          // Main cloud
     addCloud(x + 5, y - 5, SMALL * 0.35, 1); // Cloud top right
@@ -690,7 +810,7 @@ void displayCloudCover(int x, int y, int cover) {
  * @brief Title case the first word in the passed string.
  *
  * @param text    String to title case.
- * @return String Returned title cased string or empty string if text length is 0.
+ * @return String Returned title cased or empty string if text length is 0.
  */
 String titleCase(String text) {
     if (text.length() > 0)
@@ -702,6 +822,15 @@ String titleCase(String text) {
     return "";
 }
 
+/**
+ * @brief Display the wind direction and force using a compass display.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param angle Angle of the wind
+ * @param windspeed Wind speed in mph
+ * @param radius Radius of the compass in pixels
+ */
 void displayWind(int x, int y, float angle, float windspeed, int radius) {
     int offset = 16;
     int dxo;
@@ -753,6 +882,17 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
     drawString(x + offset, y + 10 + offset, String(angle, 0) + "'", CENTER);
 }
 
+/**
+ * @brief Draw the arrow of the compass used in displaying the wind direction.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param asize Arrow size in pixels
+ * @param aangle Arrow angle
+ * @param pwidth Arrow width
+ * @param plength Arrow length
+ * @param colour Colour to draw/fill the arrow
+ */
 void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour) {
     float dx = (asize - 10) * cos((aangle - 90) * PI / 180) + x; // calculate X position
     float dy = (asize - 10) * sin((aangle - 90) * PI / 180) + y; // calculate Y position
@@ -772,6 +912,12 @@ void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint1
     display.fillTriangle(xx1, yy1, xx3, yy3, xx2, yy2, colour);
 }
 
+/**
+ * @brief Return the wind direction as a compass bearing, e.g. 0 = North.
+ * 
+ * @param winddirection Wind direction in degress
+ * @return String Wind direction as a compass bearing
+ */
 String windDegToDirection(float winddirection) {
     if (winddirection >= 348.75 || winddirection < 11.25)
         return "N";
@@ -824,6 +970,12 @@ String windDegToDirection(float winddirection) {
     return "?";
 }
 
+/**
+ * @brief Display the time when the sun rises and sets.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
 void displaySunAndMoon(int x, int y) {
     time_t now = time(NULL);
     struct tm *now_utc = gmtime(&now);
@@ -838,6 +990,12 @@ void displaySunAndMoon(int x, int y) {
     drawString(x + 40, y + 42, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
 }
 
+/**
+ * @brief Display the weather forcast for the next 'forecast_counter' hours.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
 void displayWeatherForecast(int x, int y) {
     int offset = 57;
 
@@ -868,6 +1026,14 @@ void displayWeatherForecast(int x, int y) {
     // drawGraph(295, 205, 96, 75, humidity, rainfall, forecast_counter, "Hum. & Rain (mm)");
 }
 
+/**
+ * @brief Display a single 3 hourly forcast
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param offset Offset to apply as this is called for large and small boxes on the display
+ * @param index The index of the forecast to display
+ */
 void displaySingleForecast(int x, int y, int offset, int index) {
     displayWeatherIcon(x + offset / 2 + 1, y + 35, forecast[index].icon, small_icon);
 
@@ -875,6 +1041,12 @@ void displaySingleForecast(int x, int y, int offset, int index) {
     drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
 }
 
+/**
+ * @brief Convert unix time to the current time
+ * 
+ * @param unix_time Unix time value to convert
+ * @return String Current time hh:mm
+ */
 String convertUnixTime(uint32_t unix_time) {
     // Returns '21:12 PM'
     time_t tm = unix_time;
@@ -886,128 +1058,45 @@ String convertUnixTime(uint32_t unix_time) {
     return output;
 }
 
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface) {
-    //  const int diameter = 38;
-    double phase = normalizedMoonPhase(dd, mm, yy);
+/**
+ * @brief Return the julian date of a date passed in.
+ * 
+ * @param d Day
+ * @param m Month
+ * @param y Year
+ * @return int Julian date (0-366)
+ */
+// int julianDate(int d, int m, int y) {
+//     int mm, yy, k1, k2, k3, j;
 
-    if (hemisphere == "south") {
-        phase = 1 - phase;
-    }
+//     yy = y - (int)((12 - m) / 10);
+//     mm = m + 9;
 
-    // Draw dark part of moon
-    display.fillCircle(x + diameter - 1, y + diameter, diameter / 2 + 1, GxEPD_BLACK);
-    const int number_of_lines = 90;
-    for (double Ypos = 0; Ypos <= number_of_lines / 2; Ypos++) {
-        double Xpos = sqrt(number_of_lines / 2 * number_of_lines / 2 - Ypos * Ypos);
-        // Determine the edges of the lighted part of the moon
-        double Rpos = 2 * Xpos;
-        double Xpos1, Xpos2;
-        if (phase < 0.5) {
-            Xpos1 = -Xpos;
-            Xpos2 = Rpos - 2 * phase * Rpos - Xpos;
-        } else {
-            Xpos1 = Xpos;
-            Xpos2 = Xpos - 2 * phase * Rpos + Rpos;
-        }
-        // Draw light part of moon
-        double pW1x = (Xpos1 + number_of_lines) / number_of_lines * diameter + x;
-        double pW1y = (number_of_lines - Ypos) / number_of_lines * diameter + y;
-        double pW2x = (Xpos2 + number_of_lines) / number_of_lines * diameter + x;
-        double pW2y = (number_of_lines - Ypos) / number_of_lines * diameter + y;
-        double pW3x = (Xpos1 + number_of_lines) / number_of_lines * diameter + x;
-        double pW3y = (Ypos + number_of_lines) / number_of_lines * diameter + y;
-        double pW4x = (Xpos2 + number_of_lines) / number_of_lines * diameter + x;
-        double pW4y = (Ypos + number_of_lines) / number_of_lines * diameter + y;
-        display.drawLine(pW1x, pW1y, pW2x, pW2y, GxEPD_WHITE);
-        display.drawLine(pW3x, pW3y, pW4x, pW4y, GxEPD_WHITE);
-    }
+//     if (mm >= 12)
+//         mm = mm - 12;
 
-    display.drawCircle(x + diameter - 1, y + diameter, diameter / 2, GxEPD_BLACK);
-}
+//     k1 = (int)(365.25 * (yy + 4712));
+//     k2 = (int)(30.6001 * mm + 0.5);
+//     k3 = (int)((int)((yy / 100) + 49) * 0.75) - 38;
+//     // 'j' for dates in Julian calendar:
+//     j = k1 + k2 + d + 59 + 1;
 
-double normalizedMoonPhase(int d, int m, int y) {
-    int j = julianDate(d, m, y);
-    // Calculate the approximate phase of the moon
-    double Phase = (j + 4.867) / 29.53059;
+//     if (j > 2299160) {
+//         j = j - k3; // 'j' is the Julian date at 12h UT (Universal Time) For Gregorian calendar:
+//     }
 
-    return (Phase - (int)Phase);
-}
+//     return j;
+// }
 
-int julianDate(int d, int m, int y) {
-    int mm, yy, k1, k2, k3, j;
 
-    yy = y - (int)((12 - m) / 10);
-    mm = m + 9;
-
-    if (mm >= 12)
-        mm = mm - 12;
-
-    k1 = (int)(365.25 * (yy + 4712));
-    k2 = (int)(30.6001 * mm + 0.5);
-    k3 = (int)((int)((yy / 100) + 49) * 0.75) - 38;
-    // 'j' for dates in Julian calendar:
-    j = k1 + k2 + d + 59 + 1;
-
-    if (j > 2299160) {
-        j = j - k3; // 'j' is the Julian date at 12h UT (Universal Time) For Gregorian calendar:
-    }
-
-    return j;
-}
-
-void moonPhase(int x, int y, int day, int month, int year, String hemisphere) {
-    int c, e;
-    double jd;
-    int b;
-    int yoffset = y + 13; // offset down for second word of moon type
-    int xoffset = x + 4;  // offset across for shorter top word of moon type
-
-    if (month < 3) {
-        year--;
-        month += 12;
-    }
-
-    ++month;
-    c = 365.25 * year;
-    e = 30.6 * month;
-    jd = c + e + day - 694039.09; /* jd is total days elapsed */
-    jd /= 29.53059;               /* divide by the moon cycle (29.53 days) */
-    b = jd;                       /* int(jd) -> b, take integer part of jd */
-    jd -= b;                      /* subtract integer part to leave fractional part of original jd */
-    b = jd * 8 + 0.5;             /* scale fraction from 0-8 and round by adding 0.5 */
-    b = b & 7;                    /* 0 and 8 are the same phase so modulo 8 for 0 */
-
-    if (hemisphere == "south") {
-        b = 7 - b;
-    }
-
-    if (b == 0) { // New; 0% illuminated
-        drawString(xoffset, y, "New", LEFT);
-        drawString(x, yoffset, "Moon", LEFT);
-    } else if (b == 1) { // Waxing crescent; 25% illuminated
-        drawString(x, y, " Waxing", LEFT);
-        drawString(x, yoffset, "Crescent", LEFT);
-    } else if (b == 2) { // First quarter; 50% illuminated
-        drawString(x, y, " First", LEFT);
-        drawString(x, yoffset, "Quarter", LEFT);
-    } else if (b == 3) { // Waxing gibbous; 75% illuminated
-        drawString(xoffset, y, "Waxing", LEFT);
-        drawString(x, yoffset, "Gibbous", LEFT);
-    } else if (b == 4) { // Full; 100% illuminated
-        drawString(xoffset, y, "Full", LEFT);
-        drawString(x, yoffset, "Moon", LEFT);
-    } else if (b == 5) { // Waning gibbous; 75% illuminated
-        drawString(xoffset, y, "Waning", LEFT);
-        drawString(x, yoffset, "Gibbous", LEFT);
-    } else if (b == 6) { // Last quarter; 50% illuminated
-        drawString(x, y, " Third", LEFT);
-        drawString(x, yoffset, "Quarter", LEFT);
-    } else if (b == 7) { // Waning crescent; 25% illuminated
-        drawString(x, y, " Waning", LEFT);
-        drawString(x, yoffset, "Crescent", LEFT);
-    }
-}
-
+/**
+ * @brief Display the current weather as an icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param icon Icon to display as set by openweathermap.org
+ * @param large_icon If this is a large icon or not
+ */
 void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
     if (large_icon) { // == large icon, TODO: need to change this logic, variable name!
         x = x + 65;
@@ -1043,12 +1132,15 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
     }
 }
 
-void displayRain(int x, int y) {
-    if (forecast[1].rain > 0) {
-        drawString(x, y, String(forecast[0].rain, (forecast[0].rain > 0.5 ? 2 : 3)) + "mm Rain", CENTER); // Only display rainfall if > 0
-    }
-}
-
+/**
+ * @brief Display the sunny icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ * @param icon_color Icon colour
+ */
 void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
     int scale = SMALL;
     int offset = 0;
@@ -1092,6 +1184,15 @@ void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_co
     }
 }
 
+/**
+ * @brief Display the mostly sunny icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ * @param icon_color Icon colour
+ */
 void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
     int scale = SMALL;
     int offset = 0;
@@ -1120,6 +1221,14 @@ void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t i
     }
 }
 
+/**
+ * @brief Display the cloudy icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void cloudyIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1149,6 +1258,14 @@ void cloudyIcon(int x, int y, bool large_size, String icon_name) {
     addCloud(x, y + offset, scale, linesize); // Main cloud
 }
 
+/**
+ * @brief Display the very cloudy icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void veryCloudyIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1178,6 +1295,15 @@ void veryCloudyIcon(int x, int y, bool large_size, String icon_name) {
     }
 }
 
+/**
+ * @brief Display the chance of rain icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ * @param icon_color Icon colour
+ */
 void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
     int scale = SMALL;
     int offset = 0;
@@ -1203,6 +1329,14 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
     addCloud(x, y + offset, scale, linesize);
 }
 
+/**
+ * @brief Display the rain icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void rainIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1227,6 +1361,14 @@ void rainIcon(int x, int y, bool large_size, String icon_name) {
     addCloud(x, y + offset, scale, linesize);
 }
 
+/**
+ * @brief Display the thunderstorm icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void thunderStormIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1251,6 +1393,14 @@ void thunderStormIcon(int x, int y, bool large_size, String icon_name) {
     addCloud(x, y + offset, scale, linesize);
 }
 
+/**
+ * @brief Display the snow icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void snowIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1275,6 +1425,14 @@ void snowIcon(int x, int y, bool large_size, String icon_name) {
     addCloud(x, y + offset, scale, linesize);
 }
 
+/**
+ * @brief Display the misty icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ */
 void mistIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
@@ -1297,6 +1455,13 @@ void mistIcon(int x, int y, bool large_size, String icon_name) {
     }
 }
 
+/**
+ * @brief Display the sun icon
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param direction Is the sun rising (SUN_UP) or setting (SUN_DOWN)
+ */
 void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction) {
     uint16_t r = 7;
 
@@ -1332,6 +1497,13 @@ void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction) {
     display.drawLine(x + r / 2, y + r - 2, x + r, y + r - 2, GxEPD_BLACK);
 }
 
+/**
+ * @brief Draw a moon on the display to indicate this is a night time reading
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Large or small icon
+ */
 void addMoon(int x, int y, int scale) {
     if (scale == LARGE) {
         display.fillCircle(x - 37, y - 30, scale, GxEPD_BLACK);
@@ -1342,6 +1514,15 @@ void addMoon(int x, int y, int scale) {
     }
 }
 
+/**
+ * @brief Display the sun
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Radius of the circle of the sun
+ * @param icon_size Large or small icon
+ * @param icon_color Icon colour, red during the day time
+ */
 void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color) {
     int linesize = 3;
     int dxo, dyo, dxi, dyi;
@@ -1384,6 +1565,14 @@ void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color) {
     }
 }
 
+/**
+ * @brief Add some clouds to the display
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Radius/size of the cloud
+ * @param linesize Used in the calculation of the size of the cloud
+ */
 void addCloud(int x, int y, int scale, int linesize) {
     // Draw cloud outer
     display.fillCircle(x - scale * 3, y, scale, GxEPD_BLACK);                              // Left most circle
@@ -1399,6 +1588,14 @@ void addCloud(int x, int y, int scale, int linesize) {
     display.fillRect(x - scale * 3 + 2, y - scale + linesize - 1, scale * 5.9, scale * 2 - linesize * 2 + 2, GxEPD_WHITE); // Upper and lower lines
 }
 
+/**
+ * @brief Add some rain to the display
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Radius/size of the rain drops
+ * @param colour Colour of the rain drops
+ */
 void addRain(int x, int y, int scale, uint16_t colour) {
     for (byte i = 0; i < 6; i++) {
         display.fillCircle(x - scale * 4 + scale * i * 1.3, y + scale * 1.9 + (scale == SMALL ? 3 : 0), scale / 3, colour);
@@ -1406,6 +1603,14 @@ void addRain(int x, int y, int scale, uint16_t colour) {
     }
 }
 
+/**
+ * @brief Add some snow flakes to the display
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Radius/size of the snow flakes
+ * @param colour Colour of the snow flakes
+ */
 void addSnow(int x, int y, int scale, uint16_t colour) {
     int dxo, dyo, dxi, dyi;
 
@@ -1420,6 +1625,14 @@ void addSnow(int x, int y, int scale, uint16_t colour) {
     }
 }
 
+/**
+ * @brief Add the lightening for the thunder storm
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param scale Radius/size of the lightening arrows
+ * @param colour Colour of the lightening
+ */
 void addThunderStorm(int x, int y, int scale, uint16_t colour) {
     y = y + scale / 2;
 
@@ -1471,6 +1684,13 @@ void addFog(int x, int y, int scale, int linesize, uint16_t colour) {
     }
 }
 
+/**
+ * @brief Display the fact that we don't have any data to display!
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param large_size Used to set the font size to use 
+ */
 void noData(int x, int y, bool large_size) {
     int scale = SMALL;
     int offset = 0;
@@ -1488,6 +1708,13 @@ void noData(int x, int y, bool large_size) {
     drawString(x - 20, y - 10 + offset, "N/A", LEFT);
 }
 
+/**
+ * @brief Add a star to the display
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param starsize Size of the star to add, small or medium 
+ */
 void addStar(int x, int y, star_size starsize) {
     if (starsize == SMALL_STAR) {
         display.drawTriangle(x, y, x - 2, y + 3, x + 2, y + 3, GxEPD_WHITE);
@@ -1499,7 +1726,7 @@ void addStar(int x, int y, star_size starsize) {
 }
 
 /**
- * @brief Draw graph
+ * @brief Draw graph with 2 sets of data
  *
  * @param x     x coordinates
  * @param y     y coordinates
@@ -1747,12 +1974,12 @@ void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[
 }
 
 /**
- * @brief Draw text to the display.
- *
- * @param x     x coordinate.
- * @param y     y coordinate.
- * @param text  Text to draw to the display.
- * @param align Text alignment, left, right, or center.
+ * @brief Draw a string to the screen - main function for all text written to the display
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ * @param text Test to display
+ * @param align Text alignment on the screen
  */
 void drawString(int x, int y, String text, alignment align) {
     int16_t x1, y1; // the bounds of x,y and w and h of the variable 'text' in pixels.
