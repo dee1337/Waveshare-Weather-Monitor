@@ -22,7 +22,6 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include "esp_adc_cal.h"
 
 #include "GxEPD2_GFX.h"
 #include "GxEPD2_3C.h"                          // 3 colour screen
@@ -31,6 +30,7 @@
 #include <Fonts/FreeMonoBold12pt7b.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 #include "config.h"
+#include "battery.h"
 #include "fonts.h"
 #include "arrow.h"
 #include "sunrise.h"
@@ -58,15 +58,8 @@ const long sleep_duration = 30; // Number of minutes to go to sleep for
 const int sleep_hour = 22;      // Start power saving at 23:00
 const int wakeup_hour = 7;      // Stop power saving at 07:00
 
-const float LOW_BATTERY_VOLTAGE = 3.30; // warn user battery low!
-
 #define LARGE 10
 #define SMALL 4
-
-// Battery voltage and T7-S3 LED
-#define LED_PIN 17
-//#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
-#define BAT_ADC        2
 
 float battery_voltage = 0.0;
 
@@ -95,10 +88,8 @@ bool getWeatherForecast(void);
 bool getDailyWeatherForecast(void);
 static void updateLocalTime(void);
 void initialiseDisplay(void);
-uint32_t readADC_Cal(int adc_raw);
 void goToSleep(void);
 void displayBattery(int x, int y);
-int calculateBatteryPercentage(double v);
 void logWakeupReason(void);
 void displayErrorMessage(String message);
 void displaySystemInfo(int x, int y);
@@ -240,7 +231,7 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
-    battery_voltage = (round(readADC_Cal(analogRead(BAT_ADC)) * 2)) / 1000;
+    battery_voltage = getBatteryVoltage(); //(round(readADC_Cal(analogRead(BAT_ADC)) * 2)) / 1000;
 
     if (today_flag == true && forecast_flag == true)
     {
@@ -270,19 +261,6 @@ void loop() {
     }
 }
 
-/**
- * @brief Get the battery voltage
- * 
- * @param adc_raw Raw battery voltage from an adc read.
- * @return uint32_t Battery voltage, e.g. 3999.0
- */
-uint32_t readADC_Cal(int adc_raw)
-{
-    esp_adc_cal_characteristics_t adc_chars;
-
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-    return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
-}
 
 /**
  * @brief Put the chip to sleep
@@ -768,28 +746,6 @@ void displayBattery(int x, int y) {
     display.setTextColor(GxEPD_BLACK);
 }
 
-/**
- * @brief Calculate the appromimate battery life percentage remaining. Returns a value 
- * between 0-100% rounded to the nearest integer.
- * 
- * @param v Voltage reading of the battery.
- * @return int Percentage remaining
- */
-int calculateBatteryPercentage(double v)
-{
-  // this formula was calculated using samples collected from a lipo battery
-  double y = -  144.9390 * v * v * v
-             + 1655.8629 * v * v
-             - 6158.8520 * v
-             + 7501.3202;
-
-  // enforce bounds, 0-100
-  y = max(y, 0.0);
-  y = min(y, 100.0);
-  
-  y = round(y);
-  return static_cast<int>(y);
-} 
 
 /**
  * @brief Display some small clouds and the percentage value of the cloud cover. 0% is
