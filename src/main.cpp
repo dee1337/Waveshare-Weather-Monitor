@@ -39,7 +39,7 @@
 #include "sunset.h"
 
 // CaptureLog setup
-#define CLOG_ENABLE true                        // this must be defined before cLog.h is included 
+#define CLOG_ENABLE false                        // this must be defined before cLog.h is included 
 #include "cLog.h"
 
 #if CLOG_ENABLE
@@ -669,7 +669,7 @@ void displayInformation(void)
 void displayHeader(void)
 {
     drawString((SCREEN_WIDTH / 2) + 8, 1, LOCATION, CENTER);
-    drawString(SCREEN_WIDTH - 5, 2, dateStringBuff, RIGHT);
+    drawString(SCREEN_WIDTH - 5, 3, dateStringBuff, RIGHT);
     drawString(1, 1, "@", LEFT);
     drawString(13, 4, timeStringBuff, LEFT);
     drawString(115, 4, VERSION, CENTER);
@@ -768,35 +768,43 @@ void displaySystemInfo(int x, int y)
  */
 void displayBattery(int x, int y) {
     int percentage = 0;
-    int p = 0;
     int colour = GxEPD_BLACK;
 
-    if (battery_voltage >= 3 ) { 
+    if (battery_voltage >= LOW_BATTERY_VOLTAGE) { 
         //p = 2836.9625 * pow(battery_voltage, 4) - 43987.4889 * pow(battery_voltage, 3) + 255233.8134 * pow(battery_voltage, 2) - 656689.7123 * battery_voltage + 632041.7303;
         percentage = calculateBatteryPercentage(battery_voltage);
         CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", battery_voltage, percentage);
 
-        if (battery_voltage <= LOW_BATTERY_VOLTAGE || percentage < 10) {
+        if (percentage <= 25) {
             colour = GxEPD_RED;
         }
 
-        display.drawRect(x + 13, y + 3, 29, 10, GxEPD_BLACK);
-        display.fillRect(x + 42, y + 5, 2, 5, GxEPD_BLACK);
-        display.fillRect(x + 15, y + 5, 25 * percentage / 100.0, 6, colour);
+        display.drawRect(x + 9, y + 3, 34, 10, GxEPD_BLACK);
+        display.fillRect(x + 43, y + 5, 2, 6, GxEPD_BLACK);
+        display.fillRect(x + 11, y + 5, 31 * percentage / 100.0, 6, colour);
+
+        // draw lines to give a better battery icon
+        // 25% = 7
+        // 50% = 15
+        // 75% = 23
+        // 100% = 
+        display.fillRect((x + 11) + 7, y + 4, 1, 8, GxEPD_WHITE);  // 25% across
+        display.fillRect((x + 11) + 15, y + 4, 1, 8, GxEPD_WHITE);  // 50% across
+        display.fillRect((x + 11) + 23, y + 4, 1, 8, GxEPD_WHITE);  // 75% across
+        display.fillRect((x + 11) + 30, y + 4, 1, 8, GxEPD_WHITE);  // 100% across
 
         display.setTextColor(colour);
         drawString(x + 48, y + 4, String(percentage) + "%", LEFT);
-        drawString(x - 35, y + 4,  String(battery_voltage, 2) + "v", LEFT);
+        display.setTextColor(GxEPD_BLACK);
+        drawString(x - 36, y + 4,  String(battery_voltage, 2) + "v", LEFT);
     } 
     else
     {
         CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", battery_voltage);
         display.setTextColor(GxEPD_RED);
         drawString(x - 39, y + 4, "Recharge Battery", LEFT);
+        display.setTextColor(GxEPD_BLACK);
     }
-
-    // reset text colour to black
-    display.setTextColor(GxEPD_BLACK);
 }
 
 /**
@@ -1618,14 +1626,14 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon)
             display.fillRect(x + 5, y, 124, 128, GxEPD_BLACK);
             display.setTextColor(GxEPD_WHITE); // invert for night time
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_WHITE);
-            displayRain(x + 70, y + 115);
+            displayRain(x + 67, y + 115);
             display.setTextColor(GxEPD_BLACK); // reset colour
         }
         else
         {
             display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_BLACK);
-            displayRain(x + 70, y + 115);
+            displayRain(x + 67, y + 115);
         }
         x = x + 65;
         y = y + 65;
