@@ -7,8 +7,9 @@
  *
  * v1: Near copy of project by G6EJD.
  * v2: Modify display to remove weather person and re-arrange information.
- *
- * Version using Lilygo ESP32S3 T7-S3
+ * v3: Yet another different display setup.
+ * 
+ * v3.1: Version using Lilygo ESP32S3 T7-S3
  * Waveshare        ESP32S3
  *   DIN               11 (SPI MOSI)
  *   CLK               12 (SPI SCK)
@@ -16,27 +17,26 @@
  *   DC                18
  *   RST               16
  *   BUSY              15
- * 
- * This is a copy/update of the weather display written by G6EJD:
- *  https://github.com/G6EJD/ESP32-Revised-Weather-Display-42-E-Paper
  */
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "esp_adc_cal.h"    // So we can read the battery voltage
 
 #include "GxEPD2_GFX.h"
 #include "GxEPD2_3C.h"                          // 3 colour screen
 #include "GxEPD2_display_selection_new_style.h" // For selecting screen
 
 #include <Fonts/FreeMonoBold12pt7b.h>
-
+#include <Fonts/FreeMonoBold9pt7b.h>
 #include "config.h"
-#include "battery.h"
 #include "fonts.h"
 #include "arrow.h"
 #include "sunrise.h"
 #include "sunset.h"
+#include "OpenSans_Regular24pt7b.h"
+#include "OpenSans_Regular18pt7b.h"
 
 // CaptureLog setup
 #define CLOG_ENABLE false                        // this must be defined before cLog.h is included 
@@ -48,48 +48,44 @@ const uint16_t maxEntryChars = 50;
 CLOG_NEW myLog1(maxEntries, maxEntryChars, NO_TRIGGER, NO_WRAP);
 #endif
 
-/* Constants/defines */
-const uint SCREEN_WIDTH = 400;
-const uint SCREEN_HEIGHT = 300;
-const String VERSION = "vSRT";  //v2.2
-const String Hemisphere = "north";
-const int forecast_counter = 7; // number of forecasts to get/show.
-
-const long sleep_duration = 30; // Number of minutes to go to sleep for
-const int sleep_hour = 22;      // Start power saving at 23:00
-const int wakeup_hour = 7;      // Stop power saving at 07:00
-
-boolean large_icon = true;
-boolean small_icon = false;
-
-#define LARGE 10
-#define SMALL 4
-
 // T7-S3 power LED pin which we can turn off to save power
 #define LED_PIN 17
 //#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 
-#define DEBUG false
+// Battery voltage pin
+#define BAT_ADC 2
+const float LOW_BATTERY_VOLTAGE = 3.40; // warn user battery low!
 
-enum alignment
-{
+/* Constants/defines */
+const uint SCREEN_WIDTH = 400;
+const uint SCREEN_HEIGHT = 300;
+const String VERSION = "v3.1";
+const String Hemisphere = "north";
+const int forecast_counter = 16; // Number of forecasts to get/show.
+
+const long sleep_duration = 30; // Number of minutes to go to sleep for
+const int sleep_hour = 23;      // Start power saving at 23:00
+const int wakeup_hour = 8;      // Stop power saving at 08:00
+
+#define LARGE 10
+#define SMALL 4
+
+float battery_voltage = 0.0;
+
+boolean large_icon = true;
+boolean small_icon = false;
+
+enum alignment {
     LEFT,
     RIGHT,
     CENTER
 };
-enum pressure_trend
-{
-    LEVEL,
-    UP,
-    DOWN
-};
-enum sun_direction
-{
+// enum pressure_trend {LEVEL, UP, DOWN};
+enum sun_direction {
     SUN_UP,
     SUN_DOWN
 };
-enum star_size
-{
+enum star_size {
     SMALL_STAR,
     MEDIUM_STAR,
     LARGE_STAR
@@ -98,34 +94,31 @@ enum star_size
 /* Function prototypes */
 bool getTodaysWeather(void);
 bool getWeatherForecast(void);
+bool getDailyWeatherForecast(void);
 static void updateLocalTime(void);
 void initialiseDisplay(void);
-void logWakeupReason(void);
-void displayBattery(int x, int y);
 void goToSleep(void);
+static uint32_t readADC_Cal(const int adc_raw);
+uint32_t getBatteryVoltage(void);
+int calculateBatteryPercentage(double v);
+void displayBattery(int x, int y);
+void logWakeupReason(void);
 void displayErrorMessage(String message);
-void displaySystemInfo(int x, int y);
+void displayWifiErrorMessage(void);
 void drawString(int x, int y, String text, alignment align);
 void displayInformation(void);
 void displayTemperature(int x, int y);
 void displayCloudCover(int x, int y, int cover);
 void addCloud(int x, int y, int scale, int linesize);
-void displayHeader(void);
+void displaySystemInfo(int x, int y);
 void displayWind(int x, int y, float angle, float windspeed, int radius);
 void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour);
 String windDegToDirection(float winddirection);
-void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alignment align);
 String titleCase(String text);
 void displayWeatherDescription(int x, int y);
-void displayMoonPhase(int x, int y);
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour);
-void displayRain(int x, int y);
-String convertUnixTime(int unix_time);
-double normalizedMoonPhase(int d, int m, int y);
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface);
+String convertUnixTime(uint32_t unix_time);
 void displaySunAndMoon(int x, int y);
-void moonPhase(int x, int y, int day, int month, int year, String hemisphere);
-int julianDate(int d, int m, int y);
+//int julianDate(int d, int m, int y);
 void displayWeatherForecast(int x, int y);
 void displaySingleForecast(int x, int y, int offset, int index);
 void displayWeatherIcon(int x, int y, String icon, bool icon_size);
@@ -140,8 +133,9 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
 void rainIcon(int x, int y, bool large_size, String icon_name);
 void thunderStormIcon(int x, int y, bool large_size, String icon_name);
 void snowIcon(int x, int y, bool large_size, String icon_name);
-void fogIcon(int x, int y, bool large_size, String icon_name);
-void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
+void mistIcon(int x, int y, bool large_size, String icon_name);
+// void fogIcon(int x, int y, bool large_size, String icon_name);
+// void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color);
 void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction);
 void addCloud(int x, int y, int scale, int linesize);
 void addRain(int x, int y, int scale, uint16_t colour);
@@ -149,22 +143,18 @@ void addSnow(int x, int y, int scale, uint16_t colour);
 void addThunderStorm(int x, int y, int scale, uint16_t colour);
 void addFog(int x, int y, int scale, int linesize, uint16_t colour);
 void addStar(int x, int y, star_size starsize);
+void drawGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], float Data2[], int len, String title);
+void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], int len, String title);
 
 /* Globals etc. */
 WiFiClientSecure wifiClient;
 
 String ipAddress = "0:0:0:0";
 int rssi = 0;
-float battery_voltage = 0.0;
-
-float pressure_readings[forecast_counter] = {0};
-float temperature_readings[forecast_counter] = {0};
-float rain_readings[forecast_counter] = {0};
 
 // current
-typedef struct WeatherStruct
-{
-    pressure_trend trend = LEVEL;
+typedef struct WeatherStruct {
+    // pressure_trend   trend = LEVEL;
     uint8_t humidity = 0;
     uint8_t clouds = 0;
     uint16_t wind_deg = 0;
@@ -192,33 +182,35 @@ typedef struct WeatherStruct
 WeatherStruct weather;
 WeatherStruct forecast[forecast_counter];
 
-char timeStringBuff[35];      // buffer for time on the display
-char dateStringBuff[35];
+char timeStringBuff[7]; // buffer for time on the display
+char dateStringBuff[4];
+char dayStringBuff[10];
 
-void setup()
-{
-    // Ensure power LED is off to save power.
+void setup() {
+    int wifi_connect_counter = 0;
+    bool wifi_connected = true;
+    
+	// Ensure power LED is off to save power.
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
-
+    
     #if CLOG_ENABLE
     Serial.begin(115200);
-    delay(5000);    // T7-S3 serial slow to initiate!
-
-    Serial.println("\n##################################");
-    Serial.println(F("ESP32 Information:"));
-    Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n", ESP.getHeapSize(), ESP.getHeapSize() - ESP.getFreeHeap(), ESP.getFreeHeap());
-    Serial.printf("Sketch Size %d, Free Sketch Space %d\n", ESP.getSketchSize(), ESP.getFreeSketchSpace());
-    Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n", ESP.getPsramSize(), ESP.getFreePsram());
-    Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
-    Serial.printf("Flash Size %d, Flash Speed %d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
-    Serial.println("##################################\n");
-
-    // Why did we wake up
-    logWakeupReason();
+    delay(5000); // delay for serial to begin, T7-S3 is very slow to start serial output!
+	
+	logWakeupReason();
     #endif
 
     initialiseDisplay();
+
+    // Serial.println("\n##################################");
+    // Serial.println(F("ESP32 Information:"));
+    // Serial.printf("Internal Total Heap %d, Internal Used Heap %d, Internal Free Heap %d\n", ESP.getHeapSize(), ESP.getHeapSize()-ESP.getFreeHeap(), ESP.getFreeHeap());
+    // Serial.printf("Sketch Size %d, Free Sketch Space %d\n", ESP.getSketchSize(), ESP.getFreeSketchSpace());
+    // Serial.printf("SPIRam Total heap %d, SPIRam Free Heap %d\n", ESP.getPsramSize(), ESP.getFreePsram());
+    // Serial.printf("Chip Model %s, ChipRevision %d, Cpu Freq %d, SDK Version %s\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getCpuFreqMHz(), ESP.getSdkVersion());
+    // Serial.printf("Flash Size %d, Flash Speed %d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
+    // Serial.println("##################################\n");
 
     WiFi.disconnect();
 
@@ -229,49 +221,56 @@ void setup()
     while (WiFi.status() != WL_CONNECTED)
     {
         delay(500);
-        #if CLOG_ENABLE
-        Serial.print(".");
-        #endif
+        // Serial.print(".");
+
+        wifi_connect_counter++;
+
+        // Give the wifi a few seconds to connect
+        if (wifi_connect_counter > 30) {
+            wifi_connected = false;
+            break;
+        }
     }
+    
+    if (wifi_connected) {
+        // Serial.println("");
+        // Serial.println("Connecting to Wi-Fi...");
 
-    #if CLOG_ENABLE
-    Serial.println("");
-    Serial.println("Connecting to Wi-Fi...");
-    #endif
+        ipAddress = WiFi.localIP().toString();
+        rssi = WiFi.RSSI();
+        //Serial.println(ipAddress);
+        CLOG(myLog1.add(), "IP Address: %s", ipAddress);
 
-    ipAddress = WiFi.localIP().toString();
-    rssi = WiFi.RSSI();
+        //Serial.println("Connecting to NTP Time Server...");
+        configTime(0, 0, SNTP_TIME_SERVER);
+        updateLocalTime();
 
-    CLOG(myLog1.add(), "IP Address: %s", ipAddress);
-    #if CLOG_ENABLE
-    Serial.println("Connecting to NTP Time Server...");
-    #endif
+        //Serial.println("All set up, display some information...");
+        CLOG(myLog1.add(), "Setup complete...");
 
-    configTime(0, 3600, SNTP_TIME_SERVER);
-    updateLocalTime();
+        bool today_flag = getTodaysWeather();
+        bool forecast_flag = getWeatherForecast();
 
-    #if CLOG_ENABLE
-    Serial.println("All set up, time to get weather information and display it...");
-    #endif
+        // Turn off wifi to save power
+        WiFi.disconnect();
+        WiFi.mode(WIFI_OFF);
 
-    bool today_flag = getTodaysWeather();
-    bool forecast_flag = getWeatherForecast();
+        battery_voltage = getBatteryVoltage();
 
-    // Turn off wifi to save power
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
-
-    battery_voltage = (float) getBatteryVoltage(); 
-
-    if (today_flag == true || forecast_flag == true)
-    {
-        CLOG(myLog1.add(), "All data retrieved successfully.");
-        displayInformation();
-    }
-    else
-    {
-        CLOG(myLog1.add(), "Unable to retrieve data!");
-        displayErrorMessage("Unable to retrieve data, contact support ;-)");
+        if (today_flag == true && forecast_flag == true)
+        {
+            CLOG(myLog1.add(), "All data retrieved successfully.");
+            displayInformation();
+        }
+        else
+        {
+            CLOG(myLog1.add(), "Battery: %.2fV", battery_voltage);
+            CLOG(myLog1.add(), "Unable to retrieve data!");
+            displayErrorMessage("Unable to retrieve data, contact support!");
+        }
+    } else {
+        CLOG(myLog1.add(), "Unable to connect to wifi!");
+        displayWifiErrorMessage();
     }
 
     goToSleep();
@@ -282,14 +281,14 @@ void setup()
  * the display.
  * 
  */
-void loop()
-{
+void loop() {
     while (true) {
         /*
-         * Should never get here - using deep sleep after displaying weather.
+         * Should never get here - using deep sleep
          */
     }
 }
+
 
 /**
  * @brief Put the chip to sleep
@@ -328,7 +327,7 @@ void goToSleep(void) {
 
     #if CLOG_ENABLE
     Serial.println("");
-    Serial.println("Program log... ");
+    Serial.println("## This is myLog1 ##");
     for (uint16_t i = 0; i < myLog1.numEntries; i++) {
         Serial.println(myLog1.get(i));
     }
@@ -342,8 +341,7 @@ void goToSleep(void) {
  * @brief Log (cLog) why we've woken up.
  * 
  */
-void logWakeupReason(void)
-{
+void logWakeupReason(void) {
     esp_sleep_wakeup_cause_t wakeup_reason;
 
     wakeup_reason = esp_sleep_get_wakeup_cause();
@@ -359,21 +357,72 @@ void logWakeupReason(void)
 }
 
 /**
+ * @brief Get the battery voltage
+ * 
+ * @return uint32_t Battery voltage, e.g. 3.9v
+ */
+uint32_t getBatteryVoltage(void)
+{
+    float v = 0.0;
+    v = (readADC_Cal(analogRead(BAT_ADC))) * 2;
+    CLOG(myLog1.add(), "getBatteryVoltage: %f", v);
+    return v;
+}
+
+/**
+ * @brief Get the battery voltage via the battery pin
+ * 
+ * @param adc_raw Raw battery voltage from an adc read.
+ * @return uint32_t Battery voltage, e.g. 3999.0
+ */
+static uint32_t readADC_Cal(const int adc_raw)
+{
+    esp_adc_cal_characteristics_t adc_chars;
+
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+    return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
+}
+
+/**
+ * @brief Calculate the appromimate battery life percentage remaining. Returns a value 
+ * between 0-100% rounded to the nearest integer.
+ * 
+ * @param v Voltage reading of the battery.
+ * @return int Percentage remaining
+ */
+int calculateBatteryPercentage(double v)
+{
+  // this formula was calculated using samples collected from a lipo battery
+  double y = -  144.9390 * v * v * v
+             + 1655.8629 * v * v
+             - 6158.8520 * v
+             + 7501.3202;
+
+  // enforce bounds, 0-100
+  y = max(y, 0.0);
+  y = min(y, 100.0);
+  
+  y = round(y);
+  return static_cast<int>(y);
+} 
+
+/**
  * @brief Update global buffers with various times/date values.
  * 
  */
 static void updateLocalTime(void)
 {
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
-    {
+    if (!getLocalTime(&timeinfo)) {
+        //Serial.println("Failed to obtain time");
         CLOG(myLog1.add(), "Failed to obtain time");
         return;
     }
 
     // Update buffer with current time/date
-    strftime(dateStringBuff, sizeof(dateStringBuff), "%a  %d-%b-%y", &timeinfo); // Sat 15-Jan-23
-    strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M:%S", &timeinfo);     // 15:15:23
+    strftime(dateStringBuff, sizeof(dateStringBuff), "%e", &timeinfo);    // 1-9. 10-31
+    strftime(dayStringBuff, sizeof(dayStringBuff), "%A", &timeinfo);      // Saturday
+    strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo); // 15:15
 }
 
 /**
@@ -393,8 +442,7 @@ bool getTodaysWeather(void)
 
     client.setInsecure(); // certificate is not checked
 
-    if (!client.connect(host, port))
-    {
+    if (!client.connect(host, port)) {
         CLOG(myLog1.add(), "HTTPS[1] connection to OpenWeatherMap failed!");
         return false;
     }
@@ -403,58 +451,40 @@ bool getTodaysWeather(void)
     char c = 0;
 
     // Send GET request
-    #if DEBUG
-    Serial.printf("Sending GET request to %s, port %d\n", host, port);
-    #endif
     client.print(String("GET ") + WEATHER_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
-    while (client.connected())
-    {
+    while (client.connected()) {
         String line = client.readStringUntil('\n');
-        if (line == "\r")
-        {
-            #if DEBUG
-            Serial.println("Header end found.");
-            #endif
+        if (line == "\r") {
+            //Serial.println("Header end found.");
             break;
         }
 
-        #if DEBUG
         Serial.println(line);
-        #endif
 
-        if ((millis() - timeout) > 5000UL)
-        {
-            #if DEBUG
-            Serial.println("HTTP header timeout");
-            #endif
-
+        if ((millis() - timeout) > 5000UL) {
+            //Serial.println("HTTP header timeout");
             client.stop();
             return false;
         }
     }
 
-    #if DEBUG
-    //  Serial.print("JSON length: "); Serial.println(client.available());
-    Serial.println("Parsing JSON...");
-    #endif
+    //Serial.print("JSON length: "); Serial.println(client.available());
+    //Serial.println("Parsing JSON...");
 
     // bool decode = false;
     DynamicJsonDocument doc(20 * 1024);
 
-    #if DEBUG
-    Serial.println("Deserialization process starting...");
-    #endif
+    //Serial.println("Deserialization process starting...");
 
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
-    if (err)
-    {
+    if (err) {
+
         CLOG(myLog1.add(), "deserializeJson(1) failed: %s", err.c_str());
         retcode = false;
     }
-    else
-    {
+    else {
         weather.main = doc["weather"][0]["main"].as<String>();
         weather.description = doc["weather"][0]["description"].as<String>();
         weather.icon = doc["weather"][0]["icon"].as<String>();
@@ -498,9 +528,9 @@ bool getWeatherForecast(void)
 
     client.setInsecure(); // certificate is not checked
 
-    if (!client.connect(host, port))
-    {
+    if (!client.connect(host, port)) {
         CLOG(myLog1.add(), "HTTPS[2] connection to OpenWeatherMap failed!");
+
         return false;
     }
 
@@ -508,61 +538,40 @@ bool getWeatherForecast(void)
     char c = 0;
 
     // Send GET request
-    #if DEBUG
-    Serial.printf("Sending GET request to %s, port %d\n", host, port);
-    #endif
     client.print(String("GET ") + FORECAST_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
 
-    while (client.connected())
-    {
+    while (client.connected()) {
         String line = client.readStringUntil('\n');
-        if (line == "\r")
-        {
-            #if DEBUG
-            Serial.println("Header end found.");
-            #endif
-
+        if (line == "\r") {
+            //Serial.println("Header end found.");
             break;
         }
 
-        if ((millis() - timeout) > 5000UL)
-        {
-            #if DEBUG
-            Serial.println("HTTP header timeout");
-            #endif
-
+        if ((millis() - timeout) > 5000UL) {
+            //Serial.println("HTTP header timeout");
             client.stop();
             return false;
         }
     }
 
-    #if DEBUG
-    Serial.println("Parsing Forecast JSON...");
-    #endif
+    //Serial.println("Parsing Forecast JSON...");
 
-    DynamicJsonDocument doc(20 * 1024);
+    DynamicJsonDocument doc(24 * 1024);
 
-    #if DEBUG
-    Serial.println("Deserialization process starting...");
-    #endif
+    //Serial.println("Deserialization process starting...");
 
     // Parse JSON object
     DeserializationError err = deserializeJson(doc, client);
-    if (err)
-    {
+    if (err) {
         CLOG(myLog1.add(), "deserializeJson(2) failed: %s", err.c_str());
+
         retcode = false;
     }
-    else
-    {
-        #if DEBUG
-        Serial.println(F("Deserialization succeeded, decoding forecast data..."));
-        #endif
-
-        for (byte i = 0; i < forecast_counter; i++)
-        {
+    else {
+        for (byte i = 0; i < forecast_counter; i++) {
             forecast[i].dt = doc["list"][i]["dt"];
             forecast[i].temperature = doc["list"][i]["main"]["temp"];
+            forecast[i].feels_like = doc["list"][i]["main"]["feels_like"];
             forecast[i].icon = doc["list"][i]["weather"][0]["icon"].as<String>();
             forecast[i].main = doc["list"][i]["weather"][0]["main"].as<String>();
             forecast[i].description = doc["list"][i]["weather"][0]["description"].as<String>();
@@ -578,15 +587,6 @@ bool getWeatherForecast(void)
             forecast[i].period = doc["list"][i]["dt_txt"].as<String>();
         }
 
-        float ptrend = forecast[1].pressure - forecast[0].pressure; // Measure pressure slope between ~now and later
-        ptrend = ((int)(ptrend * 10)) / 10.0;                       // Remove any small variations less than 0.1
-        weather.trend = LEVEL;
-
-        if (ptrend > 0)
-            weather.trend = UP;
-        else if (ptrend < 0)
-            weather.trend = DOWN;
-
         CLOG(myLog1.add(), "Deserialized [%d] forecasts in %ld ms", forecast_counter, millis() - dt);
     }
 
@@ -599,8 +599,7 @@ bool getWeatherForecast(void)
  * @brief Set up the display, serial connection, rotation, font, colour, and size.
  * 
  */
-void initialiseDisplay()
-{
+void initialiseDisplay() {
     display.init(115200, true, 2, false); // USE THIS for Waveshare boards with "clever" reset circuit, 2ms reset pulse
     display.setRotation(0);
     display.setTextSize(0);
@@ -617,7 +616,26 @@ void initialiseDisplay()
  * 
  * @param message Message to display
  */
-void displayErrorMessage(String message)
+void displayErrorMessage(String message) {
+    display.setFullWindow();
+    display.firstPage();
+
+    do {
+        display.fillScreen(GxEPD_WHITE);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(10, 60);
+        drawString(200, 150, "Error: " + message, CENTER);
+    } while (display.nextPage());
+
+    display.hibernate();
+}
+
+/**
+ * @brief Display an error message on the display to the user.
+ * 
+ * @param message Message to display
+ */
+void displayWifiErrorMessage(void)
 {
     display.setFullWindow();
     display.firstPage();
@@ -627,7 +645,17 @@ void displayErrorMessage(String message)
         display.fillScreen(GxEPD_WHITE);
         display.setTextColor(GxEPD_BLACK);
         display.setCursor(10, 60);
-        drawString(200, 150, "Error: " + message, CENTER);
+        drawString(200, 60, "Error: Unable to connect to wifi network.", CENTER);
+        display.setTextColor(GxEPD_RED);
+        drawString(200, 85, SSID, CENTER);
+        display.setTextColor(GxEPD_BLACK);
+        drawString(30, 130, "a) Check wifi network is on.", LEFT);
+        drawString(30, 150, "b) Reboot display via on/off or reset button.", LEFT);
+        drawString(30, 170, "c) Move display closer to the router.", LEFT);
+        drawString(30, 190, "d) Contact support!", LEFT);
+
+        battery_voltage = getBatteryVoltage(); 
+        displayBattery(304, 279);
     } while (display.nextPage());
 
     display.hibernate();
@@ -644,98 +672,104 @@ void displayInformation(void)
 
     display.setFullWindow();
     display.firstPage();
-    do
-    {
-        displayHeader();
-        displayTemperature(0, 15);
-        displayWeatherIcon(140, 15, weather.icon, large_icon);          // Weather icon
-        displayWind(319, 64, weather.wind_deg, weather.wind_speed, 49); // Wind direction info
-        displayWeatherForecast(0, 172);                                 // Forecast
-        displaySunAndMoon(0, 238);                                      // Sunset and sunrise and moon state with icons
-        displayWeatherDescription(0, 148);                              // Description of the weather now
-        displaySystemInfo(263, 238);
-    } while (display.nextPage());
+//    do {
+        display.fillScreen(GxEPD_WHITE);
 
+        // draw box lines
+        // top
+        display.drawLine(0, 0, 145, 0, GxEPD_BLACK);
+        display.drawLine(147, 0, 276, 0, GxEPD_BLACK);
+        display.drawLine(278, 0, 399, 0, GxEPD_BLACK);
+
+        // right
+        display.drawLine(399, 0, 399, 150, GxEPD_BLACK);
+        display.drawLine(399, 152, 399, 180, GxEPD_BLACK);
+        display.drawLine(399, 182, 399, 299, GxEPD_BLACK);
+
+        // bottom
+        display.drawLine(0, 299, 262, 299, GxEPD_BLACK);
+        display.drawLine(264, 299, 399, 299, GxEPD_BLACK);
+
+        // left
+        display.drawLine(0, 0, 0, 150, GxEPD_BLACK);
+        display.drawLine(0, 152, 0, 180, GxEPD_BLACK);
+        display.drawLine(0, 182, 0, 299, GxEPD_BLACK);
+
+        // lines between temp/icon/wind
+        display.drawLine(145, 0, 145, 109, GxEPD_BLACK);
+        display.drawLine(147, 0, 147, 109, GxEPD_BLACK);
+        display.drawLine(276, 0, 276, 109, GxEPD_BLACK);
+        display.drawLine(278, 0, 278, 109, GxEPD_BLACK);
+
+        // line after the two graphs
+        display.drawLine(262, 182, 262, 299, GxEPD_BLACK);
+        display.drawLine(264, 182, 264, 299, GxEPD_BLACK);
+
+        // top middle lines
+        display.drawLine(0, 110, 145, 110, GxEPD_BLACK); //x=125
+        display.drawLine(147, 110, 399, 110, GxEPD_BLACK); //x=125
+        display.drawLine(0, 112, 119, 112, GxEPD_BLACK); //x=125
+        display.drawLine(121, 112, 399, 112, GxEPD_BLACK); //x=125
+
+        // lines between sun and forecasts
+        display.drawLine(119, 112, 119, 180, GxEPD_BLACK);
+        display.drawLine(121, 112, 121, 180, GxEPD_BLACK);
+        
+        // bottom middle lines
+        display.drawLine(0, 180, 119, 180, GxEPD_BLACK);  // x=125
+        display.drawLine(121, 180, 399, 180, GxEPD_BLACK);  // x=125
+
+
+        display.drawLine(0, 182, 262, 182, GxEPD_BLACK);  // x=125
+        display.drawLine(264, 182, 399, 182, GxEPD_BLACK);  // x=125
+
+        displayTemperature(0, 0);
+        displayWeatherIcon(146, -13, weather.icon, large_icon); // Weather icon
+        if (weather.clouds > 0)
+        {
+            displayCloudCover(196, 11, weather.clouds);
+        }
+        displayWeatherDescription(212, 92);                     // Description of the weather now
+        displayWind(325, 39, weather.wind_deg, weather.wind_speed, 40); // Wind direction info
+        displaySystemInfo(295, 185);
+        displaySunAndMoon(2, 114); // Sunset and sunrise and moon state with icons
+        displayWeatherForecast(118, 115);                               // Forecast
+
+//    } while (display.nextPage());
+    display.display(false);  // works instead of do:while loop
+    delay(500);
+    
     display.hibernate();
 
     CLOG(myLog1.add(), "Display updated in %ld seconds", (millis() - dt) / 1000);
 }
 
 /**
- * @brief Display the header information;
- * location of weather data, date, time of reading the weather, version.
- * 
- */
-void displayHeader(void)
-{
-    drawString((SCREEN_WIDTH / 2) + 8, 1, LOCATION, CENTER);
-    drawString(SCREEN_WIDTH - 5, 3, dateStringBuff, RIGHT);
-    drawString(1, 1, "@", LEFT);
-    drawString(13, 4, timeStringBuff, LEFT);
-    drawString(115, 4, VERSION, CENTER);
-    display.drawLine(0, 15, SCREEN_WIDTH-2, 15, GxEPD_BLACK);
-}
-
-/**
- * @brief Display the current temperature, cloud cover and humidity.
+ * @brief Display the sytem information;
+ * date, time of reading the weather, version, rssi etc.
  * 
  * @param x Display x coordinates
  * @param y Display y coordinates
  */
-void displayTemperature(int x, int y)
-{
-    display.drawRect(x, y, 144, 128, GxEPD_BLACK);
-    display.setFont(&DSEG7_Classic_Bold_21);
-    display.setTextSize(2);
-
-    if (weather.temperature < 0)
-    {
-        drawString(x, y + 61, "-", LEFT);                                       // Show temperature sign to compensate for non-proportional font spacing
-        drawString(x + 25, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
-        display.setTextSize(1);
-        drawString(x + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
-    }
-    else if (weather.temperature < 10)
-    {
-        drawString(x + 25, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
-        display.setTextSize(1);
-        drawString(x + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
-    }
-    else
-    {
-        drawString(x + 8, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
-        display.setTextSize(1);
-        drawString(x + 110, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
-    }
-
-    drawString(x + 32, y + 85, String(weather.low, 0) + "'/" + String(weather.high, 0) + "'", LEFT); // Show forecast high and Low, in the font ' is a °
-    display.setFont(&DejaVu_Sans_Bold_11);
-    drawString(x + 72, y + 114, String(weather.humidity) + "% RH", CENTER);
-    if (weather.clouds > 0)
-    {
-        displayCloudCover(x + 60, y + 10, weather.clouds);
-    }
-}
-
-/**
- * @brief Display system information which includes battery voltage, wi-fi signal
- * strength and the IP address we've been assigned. 
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- */
-void displaySystemInfo(int x, int y)
-{
+void displaySystemInfo(int x, int y) {
     int wifi_rssi = 0;
     int xpos = 1;
+    
+    display.setTextColor(GxEPD_BLACK);
+    display.setTextSize(0);
 
-    display.drawRect(x, y, 135, 62, GxEPD_BLACK);
+    display.setFont(&OpenSans_Regular18pt7b);
+    drawString(x + 95, y + 5, dateStringBuff, RIGHT);
 
-    // display battery voltage
-    displayBattery(x + 43, y + 5);
+    display.setFont(&DejaVu_Sans_Bold_11);
 
-    int rssi_x = x + 33;
-    int rssi_y = y + 36;
+    drawString(x - 26, y + 5, dayStringBuff, LEFT);
+    
+    drawString(x - 26, y + 18, "@", LEFT);
+    drawString(x - 14, y + 21, timeStringBuff, LEFT);
+
+    int rssi_x = x - 5;
+    int rssi_y = y + 70;
     for (int _rssi = -100; _rssi <= rssi; _rssi = _rssi + 20)
     {
         if (_rssi <= -20)
@@ -755,8 +789,103 @@ void displaySystemInfo(int x, int y)
     display.fillRect(rssi_x + 60, rssi_y - 1, 4, 1, GxEPD_BLACK);
     drawString(rssi_x, rssi_y - 9, String(rssi) + "dBm", LEFT);
 
-    drawString(x + 68, y + 45, ipAddress, CENTER);
+    drawString(x + 37, y + 80, ipAddress, CENTER);
+
+    displayBattery(x + 7, y + 93);
 }
+
+/**
+ * @brief Display the current temperature, cloud cover and humidity.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
+void displayTemperature(int x, int y) {
+     int x_offset = 8;
+
+    display.setFont(&DSEG7_Classic_Bold_21);
+    display.setTextSize(2);
+
+    // Center the tempearature in the weather box area
+    if (weather.temperature < 0)
+    {
+        drawString(x + x_offset, y + 61, "-", LEFT);                                       // Show temperature sign to compensate for non-proportional font spacing
+        drawString(x + x_offset + 25, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else if (weather.temperature < 10)
+    {
+        drawString(x + x_offset + 25, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else if (weather.temperature < 20)
+    {
+        drawString(x, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + 105, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else
+    {
+        drawString(x + x_offset + 5, y + 25, String(fabs(weather.temperature), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset + 110, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+
+    String buffer = String(weather.low, 0) + "'/" + String(weather.high, 0) + "'";
+    drawString(x + 70, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+
+    display.setFont(&DejaVu_Sans_Bold_11);
+
+    drawString(x + 73, y + 4, String(weather.humidity) + "% RH", CENTER);
+}
+
+/**
+ * @brief Current weather description as returned by openweathermap.org
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
+void displayWeatherDescription(int x, int y) {
+    drawString(x, y, titleCase(weather.description), CENTER);
+}
+
+// /**
+//  * @brief Display system information which could include battery voltage, wi-fi signal
+//  * strength and the IP address we've been assigned depending on screen space
+//  * 
+//  * @param x Display x coordinates
+//  * @param y Display y coordinates
+//  */
+// void displaySystemInfo(int x, int y) {
+//     int wifi_rssi = 0;
+//     int xpos = 1;
+
+//     display.drawRect(x, y, 135, 62, GxEPD_BLACK);
+
+//     int rssi_x = x + 33;
+//     int rssi_y = y + 38;
+//     for (int _rssi = -100; _rssi <= rssi; _rssi = _rssi + 20) {
+//         if (_rssi <= -20)
+//             wifi_rssi = 20; //  <-20dbm displays 5-bars
+//         if (_rssi <= -40)
+//             wifi_rssi = 16; //  -40dbm to  -21dbm displays 4-bars
+//         if (_rssi <= -60)
+//             wifi_rssi = 12; //  -60dbm to  -41dbm displays 3-bars
+//         if (_rssi <= -80)
+//             wifi_rssi = 8; //  -80dbm to  -61dbm displays 2-bars
+//         if (_rssi <= -100)
+//             wifi_rssi = 4; // -100dbm to  -81dbm displays 1-bar
+//         display.fillRect(rssi_x + xpos * 5 + 60, rssi_y - wifi_rssi, 4, wifi_rssi, GxEPD_BLACK);
+//         xpos++;
+//     }
+
+//     display.fillRect(rssi_x + 60, rssi_y - 1, 4, 1, GxEPD_BLACK);
+//     drawString(rssi_x, rssi_y - 9, String(rssi) + "dBm", LEFT);
+
+//     drawString(x + 68, y + 45, WiFi.localIP().toString(), CENTER);
+// }
 
 /**
  * @brief Display the battery voltage and percentage - we need 3.3v to drive 
@@ -768,44 +897,49 @@ void displaySystemInfo(int x, int y)
  */
 void displayBattery(int x, int y) {
     int percentage = 0;
+    int p = 0;
     int colour = GxEPD_BLACK;
+    float bv = battery_voltage/1000;
 
-    if (battery_voltage >= LOW_BATTERY_VOLTAGE) { 
+    if (bv >= 3 ) { 
         //p = 2836.9625 * pow(battery_voltage, 4) - 43987.4889 * pow(battery_voltage, 3) + 255233.8134 * pow(battery_voltage, 2) - 656689.7123 * battery_voltage + 632041.7303;
-        percentage = calculateBatteryPercentage(battery_voltage);
-        CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", battery_voltage, percentage);
+        percentage = calculateBatteryPercentage(bv);
+        CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", bv, percentage);
 
-        if (percentage <= 25) {
-            colour = GxEPD_RED;
+        int offset = 6;
+        display.drawRect(x + 9 + offset, y + 5, 34, 10, GxEPD_BLACK);
+        display.fillRect(x + 43 + offset, y + 7, 2, 6, GxEPD_BLACK);
+
+        if (bv <= LOW_BATTERY_VOLTAGE || percentage < 10) {
+            display.setTextColor(GxEPD_RED);
+            display.fillRect(x + 11 + offset, y + 7, 31 * percentage / 100.0, 6, GxEPD_RED);
+        } else {
+            display.fillRect(x + 11 + offset, y + 7, 31 * percentage / 100.0, 6, GxEPD_BLACK);
         }
-
-        display.drawRect(x + 9, y + 3, 34, 10, GxEPD_BLACK);
-        display.fillRect(x + 43, y + 5, 2, 6, GxEPD_BLACK);
-        display.fillRect(x + 11, y + 5, 31 * percentage / 100.0, 6, colour);
 
         // draw lines to give a better battery icon
         // 25% = 7
         // 50% = 15
         // 75% = 23
         // 100% = 
-        display.fillRect((x + 11) + 7, y + 4, 1, 8, GxEPD_WHITE);  // 25% across
-        display.fillRect((x + 11) + 15, y + 4, 1, 8, GxEPD_WHITE);  // 50% across
-        display.fillRect((x + 11) + 23, y + 4, 1, 8, GxEPD_WHITE);  // 75% across
-        display.fillRect((x + 11) + 30, y + 4, 1, 8, GxEPD_WHITE);  // 100% across
+        display.fillRect((x + 11 + offset) + 7, y + 6, 1, 8, GxEPD_WHITE);  // 25% across
+        display.fillRect((x + 11 + offset) + 15, y + 6, 1, 8, GxEPD_WHITE);  // 50% across
+        display.fillRect((x + 11 + offset) + 23, y + 6, 1, 8, GxEPD_WHITE);  // 75% across
+        display.fillRect((x + 11 + offset) + 30, y + 6, 1, 8, GxEPD_WHITE);  // 100% across
 
-        display.setTextColor(colour);
-        drawString(x + 48, y + 4, String(percentage) + "%", LEFT);
-        display.setTextColor(GxEPD_BLACK);
-        drawString(x - 36, y + 4,  String(battery_voltage, 2) + "v", LEFT);
+        // display.setTextColor(colour);
+        drawString(x + 55, y + 6, String(percentage) + "%", LEFT);
+        drawString(x - 29, y + 6,  String(bv, 2) + "v", LEFT);
     } 
     else
     {
-        CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", battery_voltage);
+        CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", bv);
         display.setTextColor(GxEPD_RED);
-        drawString(x - 39, y + 4, "Recharge Battery", LEFT);
+        drawString(x + 4, y - 1, "Recharge Battery", LEFT);
         display.setTextColor(GxEPD_BLACK);
     }
 }
+
 
 /**
  * @brief Display some small clouds and the percentage value of the cloud cover. 0% is
@@ -815,8 +949,7 @@ void displayBattery(int x, int y) {
  * @param y Display y coordinates
  * @param cover The percentage of the current cloud cover to display.
  */
-void displayCloudCover(int x, int y, int cover)
-{
+void displayCloudCover(int x, int y, int cover) {
     addCloud(x, y, SMALL * 0.5, 1);          // Main cloud
     addCloud(x + 5, y - 5, SMALL * 0.35, 1); // Cloud top right
     addCloud(x - 8, y - 5, SMALL * 0.35, 1); // Cloud top left
@@ -824,36 +957,12 @@ void displayCloudCover(int x, int y, int cover)
 }
 
 /**
- * @brief Current weather description as returned by openweathermap.org
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
+ * @brief Title case the first word in the passed string.
+ *
+ * @param text    String to title case.
+ * @return String Returned title cased or empty string if text length is 0.
  */
-void displayWeatherDescription(int x, int y)
-{
-    display.drawRect(x, y - 4, SCREEN_WIDTH - 1, 27, GxEPD_BLACK);
-    String description = weather.description; // + ", " + weather.main;
-
-    display.setFont(&FreeMonoBold12pt7b);
-    unsigned int MsgWidth = 28;
-    if (description.length() > MsgWidth)
-    {
-        display.setFont(&DejaVu_Sans_Bold_11); // Drop to smaller font to allow all weather description to be displayed
-        MsgWidth = 52;
-        y = y - 7;
-    }
-    drawStringMaxWidth(x + 3, y + 15, MsgWidth, titleCase(description), CENTER); // 28 character screen width at this font size
-    display.setFont(&DejaVu_Sans_Bold_11);
-}
-
-/**
- * @brief Title case the first letter of the text supplied, e.g. 'current' and 'Current' will be returned.
- * 
- * @param text Text to capitalise the first letter.
- * @return String Capitalised text.
- */
-String titleCase(String text)
-{
+String titleCase(String text) {
     if (text.length() > 0)
     {
         String temp_text = text.substring(0, 1);
@@ -861,48 +970,6 @@ String titleCase(String text)
         return temp_text + text.substring(1); // Title-case the string
     }
     return "";
-}
-
-/**
- * @brief Draw a string ensuring it doesn't exceed the max width of the display.
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param text_width Number of characters to display if possible
- * @param text Text to display
- * @param align Text alignment, LEFT, CENTER or RIGHT aligned
- */
-void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alignment align)
-{
-    int16_t x1, y1; // the bounds of x,y and w and h of the variable 'text' in pixels.
-    uint16_t w, h;
-    int font_width = 10; // 10 pixels per character - guess at the moment!
-
-    if (text.length() > text_width * 2)
-    {
-        text = text.substring(0, text_width * 2); // Truncate if too long for 2 rows of text
-    }
-
-    display.getTextBounds(text, x, y, &x1, &y1, &w, &h);
-
-    if (align == RIGHT)
-    {
-        x = x - w;
-    }
-
-    if (align == CENTER)
-    {
-        // x = x - (w / 2);
-        x = (394 - w) / 2;
-    }
-
-    display.setCursor(x, y);
-    display.println(text.substring(0, text_width));
-    if (text.length() > text_width)
-    {
-        display.setCursor(x, y + h);
-        display.println(text.substring(text_width));
-    }
 }
 
 /**
@@ -914,8 +981,7 @@ void drawStringMaxWidth(int x, int y, unsigned int text_width, String text, alig
  * @param windspeed Wind speed in mph
  * @param radius Radius of the compass in pixels
  */
-void displayWind(int x, int y, float angle, float windspeed, int radius)
-{
+void displayWind(int x, int y, float angle, float windspeed, int radius) {
     int offset = 16;
     int dxo;
     int dyo;
@@ -924,19 +990,17 @@ void displayWind(int x, int y, float angle, float windspeed, int radius)
 
     arrow(x + offset, y + offset, radius - 11, angle, 15, 22, GxEPD_RED); // Show wind direction on outer circle of width and length
     display.setTextSize(0);
-    display.drawRect(x - radius, y - radius, 129, 128, GxEPD_BLACK);
 
     display.drawCircle(x + offset, y + offset, radius, GxEPD_BLACK);       // Draw compass circle
     display.drawCircle(x + offset, y + offset, radius + 1, GxEPD_BLACK);   // Draw compass circle
     display.drawCircle(x + offset, y + offset, radius * 0.7, GxEPD_BLACK); // Draw compass inner circle
-    for (float a = 0; a < 360; a = a + 22.5)
-    {
+    for (float a = 0; a < 360; a = a + 22.5) {
         dxo = radius * cos((a - 90) * PI / 180);
         dyo = radius * sin((a - 90) * PI / 180);
         if (a == 45)
             drawString(dxo + x + 10 + offset, dyo + y - 10 + offset, "NE", CENTER);
         if (a == 135)
-            drawString(dxo + x + 12 + offset, dyo + y  + offset, "SE", CENTER);
+            drawString(dxo + x + 12 + offset, dyo + y + offset, "SE", CENTER);
         if (a == 225)
             drawString(dxo + x - 16 + offset, dyo + y + offset, "SW", CENTER);
         if (a == 315)
@@ -955,19 +1019,17 @@ void displayWind(int x, int y, float angle, float windspeed, int radius)
     drawString(x + offset, y - radius - 11 + offset, "N", CENTER);
     display.setTextColor(GxEPD_BLACK);
 
-    drawString(x + offset, y + 3 + offset + radius, "S", CENTER);
-    drawString(x - radius - 9 + offset, y - 4 + offset, "W", CENTER);
+    drawString(x + offset, y + 4 + offset + radius, "S", CENTER);
+    drawString(x - radius - 10 + offset, y - 3 + offset, "W", CENTER);
     drawString(x + radius + offset + 7, y - 4 + offset, "E", CENTER);
 
-    drawString(x + offset, y - 23 + offset, windDegToDirection(angle), CENTER);
-
-    drawString(x + offset, y - 6 + offset, String(windspeed, 1), CENTER);
+    drawString(x + offset, y - 16 + offset, String(windspeed, 1), CENTER);
 
     display.setFont(); // use default 6x8 font
-    drawString(x + offset, y - 5 + offset, "mph", CENTER);
+    drawString(x + offset + 3, y - 15 + offset, "mph", CENTER);
 
     display.setFont(&DejaVu_Sans_Bold_11);
-    drawString(x + offset, y + 16 + offset, String(angle, 0) + "'", CENTER);
+    drawString(x + offset, y + 10 + offset, String(angle, 0) + "'", CENTER);
 }
 
 /**
@@ -981,8 +1043,7 @@ void displayWind(int x, int y, float angle, float windspeed, int radius)
  * @param plength Arrow length
  * @param colour Colour to draw/fill the arrow
  */
-void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour)
-{
+void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint16_t colour) {
     float dx = (asize - 10) * cos((aangle - 90) * PI / 180) + x; // calculate X position
     float dy = (asize - 10) * sin((aangle - 90) * PI / 180) + y; // calculate Y position
     float x1 = 0;
@@ -1007,88 +1068,54 @@ void arrow(int x, int y, int asize, float aangle, int pwidth, int plength, uint1
  * @param winddirection Wind direction in degress
  * @return String Wind direction as a compass bearing
  */
-String windDegToDirection(float winddirection)
-{
-
+String windDegToDirection(float winddirection) {
     if (winddirection >= 348.75 || winddirection < 11.25)
-    {
         return "N";
-    }
 
     if (winddirection >= 11.25 && winddirection < 33.75)
-    {
         return "NNE";
-    }
 
     if (winddirection >= 33.75 && winddirection < 56.25)
-    {
         return "NE";
-    }
 
     if (winddirection >= 56.25 && winddirection < 78.75)
-    {
         return "ENE";
-    }
 
     if (winddirection >= 78.75 && winddirection < 101.25)
-    {
         return "E";
-    }
 
     if (winddirection >= 101.25 && winddirection < 123.75)
-    {
         return "ESE";
-    }
 
     if (winddirection >= 123.75 && winddirection < 146.25)
-    {
         return "SE";
-    }
 
     if (winddirection >= 146.25 && winddirection < 168.75)
-    {
         return "SSE";
-    }
 
     if (winddirection >= 168.75 && winddirection < 191.25)
-    {
         return "S";
-    }
 
     if (winddirection >= 191.25 && winddirection < 213.75)
-    {
         return "SSW";
-    }
 
     if (winddirection >= 213.75 && winddirection < 236.25)
-    {
         return "SW";
-    }
 
     if (winddirection >= 236.25 && winddirection < 258.75)
-    {
         return "WSW";
-    }
 
     if (winddirection >= 258.75 && winddirection < 281.25)
-    {
         return "W";
-    }
 
     if (winddirection >= 281.25 && winddirection < 303.75)
-    {
         return "WNW";
-    }
 
     if (winddirection >= 303.75 && winddirection < 326.25)
-    {
         return "NW";
-    }
 
     if (winddirection >= 326.25 && winddirection < 348.75)
-    {
         return "NNW";
-    }
 
     return "?";
 }
@@ -1099,24 +1126,18 @@ String windDegToDirection(float winddirection)
  * @param x Display x coordinates
  * @param y Display y coordinates
  */
-void displaySunAndMoon(int x, int y)
-{
+void displaySunAndMoon(int x, int y) {
     time_t now = time(NULL);
     struct tm *now_utc = gmtime(&now);
     const int day_utc = now_utc->tm_mday;
     const int month_utc = now_utc->tm_mon + 1;
     const int year_utc = now_utc->tm_year + 1900;
 
-    display.drawRect(x, y, 262, 62, GxEPD_BLACK);
-
     sunRiseSetIcon(x + 20, y + 20, SUN_UP);
-    sunRiseSetIcon(x + 20, y + 45, SUN_DOWN);
+    sunRiseSetIcon(x + 20, y + 47, SUN_DOWN);
 
     drawString(x + 40, y + 15, convertUnixTime(weather.sunrise).substring(0, 8), LEFT); // 08:00 AM
-    drawString(x + 40, y + 40, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
-
-    drawMoon(x + 117, y - 7, day_utc, month_utc, year_utc, Hemisphere, 38, true);
-    moonPhase(x + 183, y + 20, day_utc, month_utc, year_utc, Hemisphere);
+    drawString(x + 40, y + 42, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
 }
 
 /**
@@ -1125,21 +1146,38 @@ void displaySunAndMoon(int x, int y)
  * @param x Display x coordinates
  * @param y Display y coordinates
  */
-void displayWeatherForecast(int x, int y)
-{
+void displayWeatherForecast(int x, int y) {
     int offset = 57;
 
-    for (byte i = 0; i < forecast_counter; i++)
-    {
+    for (byte i = 0; i < 5; i++) {
         displaySingleForecast(x + offset * i, y, offset, i);
     }
 
-    for (byte i = 0; i < forecast_counter; i++)
-    {
-        pressure_readings[i] = forecast[i].pressure;
-        temperature_readings[i] = forecast[i].temperature;
-        rain_readings[i] = forecast[i].rain;
+    float temperature[forecast_counter] = {0};
+    float pressure[forecast_counter] = {0};
+    float feels_like[forecast_counter] = {0};
+    // float humidity [forecast_counter] = {0};
+    // float rainfall [forecast_counter] = {0};
+
+    for (byte i = 0; i < forecast_counter; i++) {
+        temperature[i] = forecast[i].temperature;
+        pressure[i] = forecast[i].pressure;
+        feels_like[i] = forecast[i].feels_like;
+        // humidity [i] = forecast[i].humidity;
+        // rainfall [i] = forecast[i].rain;
     }
+
+    //(x, y, w, h, Data[], lengthofdata, title)
+    // drawSingleGraph(155, 205, 96, 75, temperature, forecast_counter, "Temperature");
+
+    drawSingleGraph(155, 205, 96, 75, pressure, forecast_counter, "Pressure (hPa)"); // x=295
+
+    // drawSingleGraph(295, 205, 96, 75, humidity, forecast_counter, "Humidity (%)");
+    //(x, y, w, h, Data1[], Data2[], lengthofdata, title)
+
+    drawGraph(20, 205, 96, 75, temperature, feels_like, forecast_counter, "Temp & Feels"); //x = 155
+
+    // drawGraph(295, 205, 96, 75, humidity, rainfall, forecast_counter, "Hum. & Rain (mm)");
 }
 
 /**
@@ -1150,353 +1188,28 @@ void displayWeatherForecast(int x, int y)
  * @param offset Offset to apply as this is called for large and small boxes on the display
  * @param index The index of the forecast to display
  */
-void displaySingleForecast(int x, int y, int offset, int index)
-{
-    display.drawRect(x, y, offset - 1, 65, GxEPD_BLACK);              // big rectangle
-    display.drawLine(x, y + 13, x + offset - 2, y + 13, GxEPD_BLACK); // line under time
-
-    // If night time invert weather icon to show it's night time, feedback from focus group :-)
-    if (forecast[index].icon.endsWith("n"))
-    {
-        display.fillRect(x, y + 14, offset - 1, 50, GxEPD_BLACK);
-    }
-
+void displaySingleForecast(int x, int y, int offset, int index) {
     displayWeatherIcon(x + offset / 2 + 1, y + 35, forecast[index].icon, small_icon);
 
     drawString(x + offset / 2, y + 3, String(forecast[index].period.substring(11, 16)), CENTER);
-    // Set text colour to white as the square is now black to show it's night time
-    if (forecast[index].icon.endsWith("n"))
-    {
-        display.setTextColor(GxEPD_WHITE);
-        drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
-        // Reset set text colour to black
-        display.setTextColor(GxEPD_BLACK);
-    }
-    else
-    {
-        drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
-    }
+    drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
 }
 
 /**
  * @brief Convert unix time to the current time
  * 
  * @param unix_time Unix time value to convert
- * @return String Current time hh:mm
+ * @return String Current time hh:mm AM/PM
  */
-String convertUnixTime(int unix_time)
+String convertUnixTime(uint32_t unix_time)
 {
-    // Returns '21:12 PM'
+    // E.G. Returns '21:12 PM'
     time_t tm = unix_time;
-    struct tm *now_tm = localtime(&tm);
     char output[10];
 
-    strftime(output, sizeof(output), "%H:%M %p", now_tm);
+    strftime(output, sizeof(output), "%H:%M %p", gmtime(&tm));
 
     return output;
-}
-
-/**
- * @brief Draw the current moon on the display according to the date passed in.
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param dd Day 
- * @param mm Month
- * @param yy Year
- * @param hemisphere Our hemisphere, North or South
- * @param diameter Diameter of the moon to display
- * @param surface Display a representation of the surface of the moon
- */
-void drawMoon(int x, int y, int dd, int mm, int yy, String hemisphere, const int diameter, bool surface)
-{
-    //  const int diameter = 38;
-    double phase = normalizedMoonPhase(dd, mm, yy);
-
-    if (hemisphere == "south")
-    {
-        phase = 1 - phase;
-    }
-
-    // Draw dark part of moon
-    display.fillCircle(x + diameter - 1, y + diameter, diameter / 2 + 1, GxEPD_BLACK);
-    const int number_of_lines = 90;
-    for (double Ypos = 0; Ypos <= number_of_lines / 2; Ypos++)
-    {
-        double Xpos = sqrt(number_of_lines / 2 * number_of_lines / 2 - Ypos * Ypos);
-        // Determine the edges of the lighted part of the moon
-        double Rpos = 2 * Xpos;
-        double Xpos1, Xpos2;
-        if (phase < 0.5)
-        {
-            Xpos1 = -Xpos;
-            Xpos2 = Rpos - 2 * phase * Rpos - Xpos;
-        }
-        else
-        {
-            Xpos1 = Xpos;
-            Xpos2 = Xpos - 2 * phase * Rpos + Rpos;
-        }
-        // Draw light part of moon
-        double pW1x = (Xpos1 + number_of_lines) / number_of_lines * diameter + x;
-        double pW1y = (number_of_lines - Ypos) / number_of_lines * diameter + y;
-        double pW2x = (Xpos2 + number_of_lines) / number_of_lines * diameter + x;
-        double pW2y = (number_of_lines - Ypos) / number_of_lines * diameter + y;
-        double pW3x = (Xpos1 + number_of_lines) / number_of_lines * diameter + x;
-        double pW3y = (Ypos + number_of_lines) / number_of_lines * diameter + y;
-        double pW4x = (Xpos2 + number_of_lines) / number_of_lines * diameter + x;
-        double pW4y = (Ypos + number_of_lines) / number_of_lines * diameter + y;
-        display.drawLine(pW1x, pW1y, pW2x, pW2y, GxEPD_WHITE);
-        display.drawLine(pW3x, pW3y, pW4x, pW4y, GxEPD_WHITE);
-    }
-
-    display.drawCircle(x + diameter - 1, y + diameter, diameter / 2, GxEPD_BLACK);
-
-    if (surface)
-    {
-        // Need offset as the surface code was written by SeBassTian23.
-        x = x + 57;
-        y = y + 59;
-        // Add moon surface on top
-        display.drawPixel(x - diameter + 22, y - diameter + 1, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 3, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 24, y - diameter + 3, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 4, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 4, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 4, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 24, y - diameter + 4, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 26, y - diameter + 4, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 5, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 5, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 26, y - diameter + 5, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 6, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 6, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 6, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 23, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 25, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 28, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 30, y - diameter + 7, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 21, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 23, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 26, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 28, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 29, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 31, y - diameter + 8, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 22, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 23, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 25, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 26, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 28, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 29, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 30, y - diameter + 9, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 23, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 24, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 26, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 29, y - diameter + 10, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 21, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 24, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 28, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 30, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 31, y - diameter + 11, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 21, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 23, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 24, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 25, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 32, y - diameter + 12, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 22, y - diameter + 13, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 1, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 25, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 28, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 31, y - diameter + 14, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 1, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 29, y - diameter + 15, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 16, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 1, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 4, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 17, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 1, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 18, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 19, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 1, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 20, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 21, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 22, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 2, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 4, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 23, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 4, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 24, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 3, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 5, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 21, y - diameter + 25, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 4, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 12, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 13, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 26, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 6, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 20, y - diameter + 27, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 7, y - diameter + 28, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 8, y - diameter + 28, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 10, y - diameter + 28, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 28, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 18, y - diameter + 28, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 9, y - diameter + 29, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 11, y - diameter + 29, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 14, y - diameter + 29, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 29, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 16, y - diameter + 29, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 15, y - diameter + 30, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 19, y - diameter + 30, GxEPD_BLACK);
-        display.drawPixel(x - diameter + 17, y - diameter + 31, GxEPD_BLACK);
-    }
-}
-
-/**
- * @brief Calculate the approximate phase of the moon
- * 
- * @param d Day
- * @param m Month
- * @param y Year
- * @return double Normalised moon phase 
- */
-double normalizedMoonPhase(int d, int m, int y)
-{
-    int j = julianDate(d, m, y);
-    // Calculate the approximate phase of the moon
-    double Phase = (j + 4.867) / 29.53059;
-
-    return (Phase - (int)Phase);
 }
 
 /**
@@ -1507,106 +1220,28 @@ double normalizedMoonPhase(int d, int m, int y)
  * @param y Year
  * @return int Julian date (0-366)
  */
-int julianDate(int d, int m, int y)
-{
-    int mm, yy, k1, k2, k3, j;
-    yy = y - (int)((12 - m) / 10);
-    mm = m + 9;
-    if (mm >= 12)
-        mm = mm - 12;
-    k1 = (int)(365.25 * (yy + 4712));
-    k2 = (int)(30.6001 * mm + 0.5);
-    k3 = (int)((int)((yy / 100) + 49) * 0.75) - 38;
-    // 'j' for dates in Julian calendar:
-    j = k1 + k2 + d + 59 + 1;
-    if (j > 2299160)
-    {
-        j = j - k3; // 'j' is the Julian date at 12h UT (Universal Time) For Gregorian calendar:
-    }
+// int julianDate(int d, int m, int y) {
+//     int mm, yy, k1, k2, k3, j;
 
-    return j;
-}
+//     yy = y - (int)((12 - m) / 10);
+//     mm = m + 9;
 
-/**
- * @brief Print the current moon phase 
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param day Day
- * @param month Month
- * @param year Year
- * @param hemisphere North or South
- */
-void moonPhase(int x, int y, int day, int month, int year, String hemisphere)
-{
-    int c, e;
-    double jd;
-    int b;
-    int yoffset = y + 13; // offset down for second word of moon type
-    int xoffset = x + 4;  // offset across for shorter top word of moon type
+//     if (mm >= 12)
+//         mm = mm - 12;
 
-    if (month < 3)
-    {
-        year--;
-        month += 12;
-    }
+//     k1 = (int)(365.25 * (yy + 4712));
+//     k2 = (int)(30.6001 * mm + 0.5);
+//     k3 = (int)((int)((yy / 100) + 49) * 0.75) - 38;
+//     // 'j' for dates in Julian calendar:
+//     j = k1 + k2 + d + 59 + 1;
 
-    ++month;
-    c = 365.25 * year;
-    e = 30.6 * month;
-    jd = c + e + day - 694039.09; /* jd is total days elapsed */
-    jd /= 29.53059;               /* divide by the moon cycle (29.53 days) */
-    b = jd;                       /* int(jd) -> b, take integer part of jd */
-    jd -= b;                      /* subtract integer part to leave fractional part of original jd */
-    b = jd * 8 + 0.5;             /* scale fraction from 0-8 and round by adding 0.5 */
-    b = b & 7;                    /* 0 and 8 are the same phase so modulo 8 for 0 */
+//     if (j > 2299160) {
+//         j = j - k3; // 'j' is the Julian date at 12h UT (Universal Time) For Gregorian calendar:
+//     }
 
-    if (hemisphere == "south")
-    {
-        b = 7 - b;
-    }
+//     return j;
+// }
 
-    if (b == 0)
-    { // New; 0% illuminated
-        drawString(xoffset, y, "New", LEFT);
-        drawString(x, yoffset, "Moon", LEFT);
-    }
-    else if (b == 1)
-    { // Waxing crescent; 25% illuminated
-        drawString(x, y, " Waxing", LEFT);
-        drawString(x, yoffset, "Crescent", LEFT);
-    }
-    else if (b == 2)
-    { // First quarter; 50% illuminated
-        drawString(x, y, " First", LEFT);
-        drawString(x, yoffset, "Quarter", LEFT);
-    }
-    else if (b == 3)
-    { // Waxing gibbous; 75% illuminated
-        drawString(xoffset, y, "Waxing", LEFT);
-        drawString(x, yoffset, "Gibbous", LEFT);
-    }
-    else if (b == 4)
-    { // Full; 100% illuminated
-        drawString(xoffset, y, "Full", LEFT);
-        drawString(x, yoffset, "Moon", LEFT);
-    }
-    else if (b == 5)
-    { // Waning gibbous; 75% illuminated
-        drawString(xoffset, y, "Waning", LEFT);
-        drawString(x, yoffset, "Gibbous", LEFT);
-    }
-    else if (b == 6)
-    { // Last quarter; 50% illuminated
-        drawString(x, y, " Third", LEFT);
-        drawString(x, yoffset, "Quarter", LEFT);
-    }
-    else if (b == 7)
-    { // Waning crescent; 25% illuminated
-        drawString(x, y, " Waning", LEFT);
-        drawString(x, yoffset, "Crescent", LEFT);
-    }
-}
 
 /**
  * @brief Display the current weather as an icon
@@ -1616,131 +1251,90 @@ void moonPhase(int x, int y, int day, int month, int year, String hemisphere)
  * @param icon Icon to display as set by openweathermap.org
  * @param large_icon If this is a large icon or not
  */
-void displayWeatherIcon(int x, int y, String icon, bool large_icon)
-{
-    if (large_icon)
-    { // == large icon, TODO: need to change this logic, variable name!
-        // Night time
-        if (icon.endsWith("n"))
-        {
-            display.fillRect(x + 5, y, 124, 128, GxEPD_BLACK);
-            display.setTextColor(GxEPD_WHITE); // invert for night time
-            displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_WHITE);
-            displayRain(x + 67, y + 115);
-            display.setTextColor(GxEPD_BLACK); // reset colour
-        }
-        else
-        {
-            display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
-            displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_BLACK);
-            displayRain(x + 67, y + 115);
-        }
+void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
+    if (large_icon) { // == large icon, TODO: need to change this logic, variable name!
         x = x + 65;
         y = y + 65;
     }
 
-    if (icon == "01d")
-    { // sun
+    if (icon == "01d") { // sun
         sunnyIcon(x, y, large_icon, icon, GxEPD_RED);
-    }
-    else if (icon == "01n")
-    {
+    } else if (icon == "01n") {
         sunnyIcon(x, y, large_icon, icon, GxEPD_BLACK);
-    }
-    else if (icon == "02d")
-    { // few clouds (clouds and sun)
+    } else if (icon == "02d") { // few clouds (clouds and sun)
         mostlySunnyIcon(x, y, large_icon, icon, GxEPD_RED);
-    }
-    else if (icon == "02n")
-    {
+    } else if (icon == "02n") {
         mostlySunnyIcon(x, y, large_icon, icon, GxEPD_BLACK);
-    }
-    else if (icon == "03d" || icon == "03n")
-    { // scattered clouds, no sun
+    } else if (icon == "03d" || icon == "03n") { // scattered clouds, no sun
         cloudyIcon(x, y, large_icon, icon);
-    }
-    else if (icon == "04d" || icon == "04n")
-    { // broken clouds, more clouds than scatterred!
+    } else if (icon == "04d" || icon == "04n") { // broken clouds, more clouds than scatterred!
         veryCloudyIcon(x, y, large_icon, icon);
-    }
-    else if (icon == "09d")
-    {
+    } else if (icon == "09d") {
         chanceOfRainIcon(x, y, large_icon, icon, GxEPD_RED);
-    }
-    else if (icon == "09n")
-    {
+    } else if (icon == "09n") {
         chanceOfRainIcon(x, y, large_icon, icon, GxEPD_BLACK);
-    }
-    else if (icon == "10d" || icon == "10n")
-    {
+    } else if (icon == "10d" || icon == "10n") {
         rainIcon(x, y, large_icon, icon);
-    }
-    else if (icon == "11d" || icon == "11n")
-    {
+    } else if (icon == "11d" || icon == "11n") {
         thunderStormIcon(x, y, large_icon, icon);
-    }
-    else if (icon == "13d" || icon == "13n")
-    {
+    } else if (icon == "13d" || icon == "13n") {
         snowIcon(x, y, large_icon, icon);
-    }
-    else if (icon == "50d")
-    {
-        hazeIcon(x, y, large_icon, icon, GxEPD_RED);
-    }
-    else if (icon == "50n")
-    {
-        fogIcon(x, y, large_icon, icon);
-    }
-    else
-    {
+    } else if (icon == "50d" || icon == "50n") {
+        mistIcon(x, y, large_icon, icon);
+    } else {
         noData(x, y, large_icon);
     }
 }
 
 /**
- * @brief Display the current barometric pressure and the trend, i.e. is is going to rise, fall or stay as it is
- * in the next 3 hours.
+ * @brief Display the sunny icon
  * 
  * @param x Display x coordinates
  * @param y Display y coordinates
- * @param pressure Current barometric ressure value
- * @param slope Is it going to rise/fall/stay the same
- * @param colour Colour of the trend arrow
+ * @param large_size Large or small icon
+ * @param icon_name Icon name, looking to see if this is a day or night icon
+ * @param icon_color Icon colour
  */
-void displayPressureAndTrend(int x, int y, float pressure, pressure_trend slope, uint16_t colour)
-{
-    display.setFont(&DSEG7_Classic_Bold_21);
-    drawString(x - 35, y - 95, String(pressure, 0), LEFT); // metric
-    display.setFont(&DejaVu_Sans_Bold_11);
-    drawString(x + 36, y - 90, "hPa", LEFT);
-    if (slope == LEVEL)
-    {
-        display.drawInvertedBitmap(x + 60, y - 96, FL_Arrow, 18, 18, colour); // Steady
+void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
+    int scale = SMALL;
+    int offset = 0;
+
+    if (large_size) {
+        scale = LARGE;
+        offset = 0;
     }
 
-    if (slope == DOWN)
-    {
-        display.drawInvertedBitmap(x + 60, y - 96, DN_Arrow, 18, 18, colour); // Falling
-    }
+    if (icon_name.endsWith("n")) { // Night time, show stars
+        addMoon(x, y + offset, scale);
 
-    if (slope == UP)
-    {
-        display.drawInvertedBitmap(x + 60, y - 96, UP_Arrow, 18, 18, colour); // Rising
-    }
-}
+        if (!large_size) {
+            // Small stars
+            addStar(x, y, SMALL_STAR);
+            addStar(x - 18, y + 3, SMALL_STAR);
+            addStar(x + 17, y - 10, SMALL_STAR);
 
-/**
- * @brief Display how much rainfall there is
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- */
-void displayRain(int x, int y)
-{
-    if (forecast[1].rain > 0)
-    {
-
-        drawString(x, y, String(forecast[0].rain, (forecast[0].rain > 0.5 ? 2 : 3)) + "mm Rain", CENTER); // Only display rainfall if > 0
+            // Medium stars
+            addStar(x - 1, y - 14, MEDIUM_STAR); // top left star
+            addStar(x + 10, y, MEDIUM_STAR);     // bottom right star
+        } else {
+            // Fill area with random stars
+            int horizontal = 0;
+            int vertical = 0;
+            int left = 150;
+            int top = 45;
+            int width = 115;
+            int height = 90;
+            display.setTextColor(GxEPD_WHITE);
+            for (int i = 0; i <= 41; i++) {
+                horizontal = (int)(((rand() / (RAND_MAX * 1.0f)) * width) + left);
+                vertical = (int)(((rand() / (RAND_MAX * 1.0f)) * height) + top);
+                drawString(horizontal, vertical, ".", LEFT);
+            }
+            display.setTextColor(GxEPD_BLACK);
+        }
+    } else { // Day time, show sun
+        scale = scale * 1.5;
+        addSun(x, y + offset, scale, large_size, icon_color);
     }
 }
 
@@ -1753,93 +1347,31 @@ void displayRain(int x, int y)
  * @param icon_name Icon name, looking to see if this is a day or night icon
  * @param icon_color Icon colour
  */
-void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color)
-{
+void mostlySunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
-        scale = LARGE;
-        offset = 17;
-    }
-
-    if (scale == SMALL)
-    {
-        linesize = 1;
-    }
-
-    if (icon_name.endsWith("n"))
-    { // Night time, add stars
-        addMoon(x, y + offset, scale);
-    }
-    else
-    { // Day time, add sun
-        addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
-    }
-
-    addCloud(x, y + offset, scale, linesize);
-}
-
-/**
- * @brief Display the sunny icon
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param large_size Large or small icon
- * @param icon_name Icon name, looking to see if this is a day or night icon
- * @param icon_color Icon colour
- */
-void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color)
-{
-    int scale = SMALL;
-    int offset = 0;
-
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
         offset = 10;
     }
 
-    if (icon_name.endsWith("n"))
-    { // Night time, show stars
-        addMoon(x, y + offset, scale);
-
-        if (!large_size)
-        {
-            // Small stars
-            addStar(x, y, SMALL_STAR);
-            addStar(x - 18, y + 3, SMALL_STAR);
-            addStar(x + 17, y - 10, SMALL_STAR);
-
-            // Medium stars
-            addStar(x - 1, y - 14, MEDIUM_STAR); // top left star
-            addStar(x + 10, y, MEDIUM_STAR);     // bottom right star
-        }
-        else
-        {
-            // Fill area with random stars
-            int horizontal = 0;
-            int vertical = 0;
-            int left = 150;
-            int top = 45;
-            int width = 115;
-            int height = 90;
-            display.setTextColor(GxEPD_WHITE);
-            for (int i = 0; i <= 41; i++)
-            {
-                horizontal = (int)(((rand() / (RAND_MAX * 1.0f)) * width) + left);
-                vertical = (int)(((rand() / (RAND_MAX * 1.0f)) * height) + top);
-                drawString(horizontal, vertical, ".", LEFT);
-            }
-            display.setTextColor(GxEPD_BLACK);
-        }
+    if (scale == SMALL) {
+        linesize = 1;
     }
-    else
-    { // Day time, show sun
-        scale = scale * 1.5;
-        addSun(x, y + offset, scale, large_size, icon_color);
+
+    if (icon_name.endsWith("n")) { // Night time, add stars
+        addMoon(x, y + offset, scale);
+    } else { // Day time, add sun
+        addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
+    }
+
+    if (scale == SMALL) {
+        addCloud(x, y + offset, 2, linesize);
+    } else {
+        addCloud(x + 28, y - 18 + offset, 4, linesize); // Cloud top right
+        addCloud(x - 20, y - 6 + offset, 4, linesize);  // Cloud top left  }
     }
 }
 
@@ -1851,35 +1383,33 @@ void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_co
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void cloudyIcon(int x, int y, bool large_size, String icon_name)
-{
+void cloudyIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
-        if (icon_name.endsWith("n"))
+    if (scale == SMALL) {
+        if (icon_name.endsWith("n")) {
             addMoon(x, y + offset, scale);
-
+        } else {
+            addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, GxEPD_RED);
+        }
         linesize = 1;
         addCloud(x, y + offset, scale, linesize);
-    }
-    else
-    {
-        if (icon_name.endsWith("n"))
-        {
+    } else {
+        if (icon_name.endsWith("n")) {
             addMoon(x, y + offset, scale);
+        } else { // Day time, add sun
+            addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, GxEPD_RED);
         }
-
-        addCloud(x, y + offset, scale, linesize); // Main cloud
     }
+
+    addCloud(x, y + offset, scale, linesize); // Main cloud
 }
 
 /**
@@ -1890,20 +1420,17 @@ void cloudyIcon(int x, int y, bool large_size, String icon_name)
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void veryCloudyIcon(int x, int y, bool large_size, String icon_name)
-{
+void veryCloudyIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         if (icon_name.endsWith("n"))
             addMoon(x, y + offset, scale);
 
@@ -1911,11 +1438,8 @@ void veryCloudyIcon(int x, int y, bool large_size, String icon_name)
         addCloud(x - 7, y - 7 + offset, 2, linesize);  // Left v.small
         addCloud(x + 8, y - 10 + offset, 2, linesize); // Right v.small
         addCloud(x, y + offset, scale, linesize);      // Main cloud
-    }
-    else
-    {
-        if (icon_name.endsWith("n"))
-        {
+    } else {
+        if (icon_name.endsWith("n")) {
             addMoon(x, y + offset, scale);
         }
 
@@ -1934,34 +1458,27 @@ void veryCloudyIcon(int x, int y, bool large_size, String icon_name)
  * @param icon_name Icon name, looking to see if this is a day or night icon
  * @param icon_color Icon colour
  */
-void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color)
-{
+void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         linesize = 1;
     }
 
-    if (icon_name.endsWith("n"))
-    {
+    if (icon_name.endsWith("n")) {
         addMoon(x, y + offset, scale);
-        addRain(x, y + offset, scale, GxEPD_WHITE);
-    }
-    else
-    {
+    } else {
         addSun(x - scale * 1.8, y - scale * 1.8 + offset, scale, large_size, icon_color);
-        addRain(x, y + offset, scale, GxEPD_BLACK);
     }
 
+    addRain(x, y + offset, scale, GxEPD_BLACK);
     addCloud(x, y + offset, scale, linesize);
 }
 
@@ -1973,33 +1490,25 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void rainIcon(int x, int y, bool large_size, String icon_name)
-{
+void rainIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         linesize = 1;
     }
 
-    if (icon_name.endsWith("n"))
-    {
+    if (icon_name.endsWith("n")) {
         addMoon(x, y + offset, scale);
-        addRain(x, y + offset, scale, GxEPD_WHITE);
     }
-    else
-    {
-        addRain(x, y + offset, scale, GxEPD_BLACK);
-    }
-
+    
+    addRain(x, y + offset, scale, GxEPD_BLACK);
     addCloud(x, y + offset, scale, linesize);
 }
 
@@ -2011,31 +1520,25 @@ void rainIcon(int x, int y, bool large_size, String icon_name)
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void thunderStormIcon(int x, int y, bool large_size, String icon_name)
-{
+void thunderStormIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         linesize = 1;
     }
 
-    if (icon_name.endsWith("n"))
-    {
+    if (icon_name.endsWith("n")) {
         addMoon(x, y + offset, scale);
-        addThunderStorm(x, y + offset, scale, GxEPD_WHITE);
-    }
-    else
-    {
         addThunderStorm(x, y + offset, scale, GxEPD_BLACK);
+    } else {
+        addThunderStorm(x, y + offset, scale, GxEPD_RED);
     }
 
     addCloud(x, y + offset, scale, linesize);
@@ -2049,109 +1552,55 @@ void thunderStormIcon(int x, int y, bool large_size, String icon_name)
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void snowIcon(int x, int y, bool large_size, String icon_name)
-{
+void snowIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         linesize = 1;
     }
 
-    if (icon_name.endsWith("n"))
-    {
+    if (icon_name.endsWith("n")) {
         addMoon(x, y + offset, scale);
-        addSnow(x, y + offset, scale, GxEPD_WHITE);
     }
-    else
-    {
-        addSnow(x, y + offset, scale, GxEPD_BLACK);
-    }
-
+    
+    addSnow(x, y + offset, scale, GxEPD_BLACK);
     addCloud(x, y + offset, scale, linesize);
 }
 
 /**
- * @brief Display the fog icon
+ * @brief Display the misty icon
  * 
  * @param x Display x coordinates
  * @param y Display y coordinates
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-void fogIcon(int x, int y, bool large_size, String icon_name)
-{
+void mistIcon(int x, int y, bool large_size, String icon_name) {
     int scale = SMALL;
     int offset = 0;
     int linesize = 3;
 
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
-        offset = 12;
+        offset = 0;
     }
 
-    if (scale == SMALL)
-    {
+    if (scale == SMALL) {
         linesize = 1;
     }
 
-    if (icon_name.endsWith("n"))
-    {
+    if (icon_name.endsWith("n")) {
         addMoon(x, y + offset, scale);
-        addFog(x, y + offset, scale, linesize, GxEPD_WHITE);
-    }
-    else
-    {
-        addFog(x, y + offset, scale, linesize, GxEPD_BLACK);
-        addCloud(x, y + offset, scale, linesize);
-    }
-}
-
-/**
- * @brief Display the haze icon
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param large_size Large or small icon
- * @param icon_name Icon name, looking to see if this is a day or night icon
- * @param icon_color Icon colour
- */
-void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_color)
-{
-    int scale = SMALL;
-    int offset = 0;
-    int linesize = 3;
-
-    if (large_size)
-    {
-        scale = LARGE;
-        offset = 7;
-    }
-
-    if (scale == SMALL)
-    {
-        linesize = 1;
-    }
-
-    if (icon_name.endsWith("n"))
-    {
-        addMoon(x, y + offset, scale);
-        addFog(x, y + offset, scale * 1.4, linesize, GxEPD_WHITE);
-    }
-    else
-    {
-        addSun(x, y + offset, scale * 1.4, large_size, icon_color);
-        addFog(x, y + offset, scale * 1.4, linesize, GxEPD_BLACK);
-    }
+    } 
+    
+    addFog(x, y + offset, scale, linesize, GxEPD_BLACK);
 }
 
 /**
@@ -2161,8 +1610,7 @@ void hazeIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_col
  * @param y Display y coordinates
  * @param direction Is the sun rising (SUN_UP) or setting (SUN_DOWN)
  */
-void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction)
-{
+void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction) {
     uint16_t r = 7;
 
     // Horizontal
@@ -2182,14 +1630,11 @@ void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction)
     display.fillRect(x - r, y + 4, r * 2, r, GxEPD_WHITE);
 
     // Arrow up
-    if (direction == SUN_UP)
-    {
+    if (direction == SUN_UP) {
         display.fillTriangle(x - r / 2 - 1, y + r - 2, x, y + r - 7, x + r / 2 + 1, y + r - 2, GxEPD_WHITE);
         display.drawLine(x - r / 2, y + r - 2, x, y + r - 6, GxEPD_BLACK);
         display.drawLine(x, y + r - 6, x + r / 2, y + r - 2, GxEPD_BLACK);
-    }
-    else
-    {
+    } else {
         // Arrow DOWN
         display.drawLine(x - r / 2, y + r - 2, x, y + r + 2, GxEPD_BLACK);
         display.drawLine(x, y + r + 2, x + r / 2, y + r - 2, GxEPD_BLACK);
@@ -2207,21 +1652,13 @@ void sunRiseSetIcon(uint16_t x, uint16_t y, sun_direction direction)
  * @param y Display y coordinates
  * @param scale Large or small icon
  */
-void addMoon(int x, int y, int scale)
-{
-    if (scale == LARGE)
-    {
-        // time_t now = time(NULL);
-        // struct tm * now_utc  = gmtime(&now);
-
-        // drawMoon(x - 65, y - 60, now_utc->tm_mday, now_utc->tm_mon + 1, now_utc->tm_year + 1900, Hemisphere, 32, false);
-        display.fillCircle(x - 37, y - 33, scale, GxEPD_WHITE);
-        display.fillCircle(x - 25, y - 33, scale * 1.6, GxEPD_BLACK);
-    }
-    else
-    {
-        display.fillCircle(x - 20, y - 15, scale, GxEPD_WHITE);
-        display.fillCircle(x - 15, y - 15, scale * 1.6, GxEPD_BLACK);
+void addMoon(int x, int y, int scale) {
+    if (scale == LARGE) {
+        display.fillCircle(x - 37, y - 30, scale, GxEPD_BLACK);
+        display.fillCircle(x - 24, y - 30, scale * 1.6, GxEPD_WHITE);
+    } else {
+        display.fillCircle(x - 20, y - 15, scale, GxEPD_BLACK);
+        display.fillCircle(x - 15, y - 15, scale * 1.6, GxEPD_WHITE);
     }
 }
 
@@ -2234,51 +1671,41 @@ void addMoon(int x, int y, int scale)
  * @param icon_size Large or small icon
  * @param icon_color Icon colour, red during the day time
  */
-void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color)
-{
+void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color) {
     int linesize = 3;
     int dxo, dyo, dxi, dyi;
 
-    if (icon_size == small_icon)
-    {
+    if (icon_size == small_icon) {
         linesize = 1;
     }
 
     display.fillCircle(x, y, scale, icon_color);
-    if (icon_color != GxEPD_RED)
-    { // not day time or 2 colour display
+    if (icon_color != GxEPD_RED) { // not day time or 2 colour display
         display.fillCircle(x, y, scale - linesize, GxEPD_WHITE);
     }
 
-    for (float i = 0; i < 360; i = i + 45)
-    {
+    for (float i = 0; i < 360; i = i + 45) {
         dxo = 2.2 * scale * cos((i - 90) * 3.14 / 180);
         dxi = dxo * 0.6;
         dyo = 2.2 * scale * sin((i - 90) * 3.14 / 180);
         dyi = dyo * 0.6;
-        if (i == 0 || i == 180)
-        {
+        if (i == 0 || i == 180) {
             display.drawLine(dxo + x - 1, dyo + y, dxi + x - 1, dyi + y, GxEPD_BLACK);
-            if (icon_size == large_icon)
-            {
+            if (icon_size == large_icon) {
                 display.drawLine(dxo + x + 0, dyo + y, dxi + x + 0, dyi + y, GxEPD_BLACK);
                 display.drawLine(dxo + x + 1, dyo + y, dxi + x + 1, dyi + y, GxEPD_BLACK);
             }
         }
-        if (i == 90 || i == 270)
-        {
+        if (i == 90 || i == 270) {
             display.drawLine(dxo + x, dyo + y - 1, dxi + x, dyi + y - 1, GxEPD_BLACK);
-            if (icon_size == large_icon)
-            {
+            if (icon_size == large_icon) {
                 display.drawLine(dxo + x, dyo + y + 0, dxi + x, dyi + y + 0, GxEPD_BLACK);
                 display.drawLine(dxo + x, dyo + y + 1, dxi + x, dyi + y + 1, GxEPD_BLACK);
             }
         }
-        if (i == 45 || i == 135 || i == 225 || i == 315)
-        {
+        if (i == 45 || i == 135 || i == 225 || i == 315) {
             display.drawLine(dxo + x - 1, dyo + y, dxi + x - 1, dyi + y, GxEPD_BLACK);
-            if (icon_size == large_icon)
-            {
+            if (icon_size == large_icon) {
                 display.drawLine(dxo + x + 0, dyo + y, dxi + x + 0, dyi + y, GxEPD_BLACK);
                 display.drawLine(dxo + x + 1, dyo + y, dxi + x + 1, dyi + y, GxEPD_BLACK);
             }
@@ -2294,8 +1721,7 @@ void addSun(int x, int y, int scale, boolean icon_size, uint16_t icon_color)
  * @param scale Radius/size of the cloud
  * @param linesize Used in the calculation of the size of the cloud
  */
-void addCloud(int x, int y, int scale, int linesize)
-{
+void addCloud(int x, int y, int scale, int linesize) {
     // Draw cloud outer
     display.fillCircle(x - scale * 3, y, scale, GxEPD_BLACK);                              // Left most circle
     display.fillCircle(x + scale * 3, y, scale, GxEPD_BLACK);                              // Right most circle
@@ -2318,10 +1744,8 @@ void addCloud(int x, int y, int scale, int linesize)
  * @param scale Radius/size of the rain drops
  * @param colour Colour of the rain drops
  */
-void addRain(int x, int y, int scale, uint16_t colour)
-{
-    for (byte i = 0; i < 6; i++)
-    {
+void addRain(int x, int y, int scale, uint16_t colour) {
+    for (byte i = 0; i < 6; i++) {
         display.fillCircle(x - scale * 4 + scale * i * 1.3, y + scale * 1.9 + (scale == SMALL ? 3 : 0), scale / 3, colour);
         arrow(x - scale * 4 + scale * i * 1.3 + (scale == SMALL ? 6 : 4), y + scale * 1.6 + (scale == SMALL ? -3 : -1), scale / 6, 40, scale / 1.6, scale * 1.2, colour);
     }
@@ -2335,14 +1759,11 @@ void addRain(int x, int y, int scale, uint16_t colour)
  * @param scale Radius/size of the snow flakes
  * @param colour Colour of the snow flakes
  */
-void addSnow(int x, int y, int scale, uint16_t colour)
-{
+void addSnow(int x, int y, int scale, uint16_t colour) {
     int dxo, dyo, dxi, dyi;
 
-    for (byte flakes = 0; flakes < 5; flakes++)
-    {
-        for (int i = 0; i < 360; i = i + 45)
-        {
+    for (byte flakes = 0; flakes < 5; flakes++) {
+        for (int i = 0; i < 360; i = i + 45) {
             dxo = 0.5 * scale * cos((i - 90) * 3.14 / 180);
             dxi = dxo * 0.1;
             dyo = 0.5 * scale * sin((i - 90) * 3.14 / 180);
@@ -2360,27 +1781,22 @@ void addSnow(int x, int y, int scale, uint16_t colour)
  * @param scale Radius/size of the lightening arrows
  * @param colour Colour of the lightening
  */
-void addThunderStorm(int x, int y, int scale, uint16_t colour)
-{
+void addThunderStorm(int x, int y, int scale, uint16_t colour) {
     y = y + scale / 2;
 
-    for (byte i = 0; i < 5; i++)
-    {
+    for (byte i = 0; i < 5; i++) {
         display.drawLine(x - scale * 4 + scale * i * 1.5 + 0, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 0, y + scale, colour);
-        if (scale != SMALL)
-        {
+        if (scale != SMALL) {
             display.drawLine(x - scale * 4 + scale * i * 1.5 + 1, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 1, y + scale, colour);
             display.drawLine(x - scale * 4 + scale * i * 1.5 + 2, y + scale * 1.5, x - scale * 3.5 + scale * i * 1.5 + 2, y + scale, colour);
         }
         display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 0, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 0, colour);
-        if (scale != SMALL)
-        {
+        if (scale != SMALL) {
             display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 1, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 1, colour);
             display.drawLine(x - scale * 4 + scale * i * 1.5, y + scale * 1.5 + 2, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5 + 2, colour);
         }
         display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 0, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 0, y + scale * 1.5, colour);
-        if (scale != SMALL)
-        {
+        if (scale != SMALL) {
             display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 1, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 1, y + scale * 1.5, colour);
             display.drawLine(x - scale * 3.5 + scale * i * 1.4 + 2, y + scale * 2.5, x - scale * 3 + scale * i * 1.5 + 2, y + scale * 1.5, colour);
         }
@@ -2388,32 +1804,31 @@ void addThunderStorm(int x, int y, int scale, uint16_t colour)
 }
 
 /**
- * @brief Add some fog to the display
- * 
- * @param x Display x coordinates
- * @param y Display y coordinates
- * @param scale Radius/size of the fog
- * @param linesize Used in the calculation of the size of the fog
- * @param colour Colour to draw the fog
+ * @brief Add some lines to give the impression of mist/haze/fog
+ *
+ * @param x Across
+ * @param y Down
+ * @param scale Large or small scale
+ * @param linesize Width of line
+ * @param colour Colour of line
  */
-void addFog(int x, int y, int scale, int linesize, uint16_t colour)
-{
-    if (scale == SMALL)
-    {
-        y -= 10;
+void addFog(int x, int y, int scale, int linesize, uint16_t colour) {
+    int offset = 10;
+    
+    if (scale == SMALL) {
+        offset = 5;
     }
 
-    for (byte i = 0; i < 6; i++)
-    {
-        display.fillRect((x + 8) - scale * 3, y + scale * -1, scale * 4, linesize, colour);
-        display.fillRect((x + 10) - scale * 3, y + scale * -0.5, scale * 5, linesize, colour);
-        display.fillRect((x + 5) - scale * 3, y + scale * 0, scale * 3, linesize, colour);
-        display.fillRect((x + 12) - scale * 3, y + scale * 0.5, scale * 2, linesize, colour);
-        display.fillRect((x + 8) - scale * 3, y + scale * 1, scale * 4, linesize, colour);
+    for (byte i = 0; i < 6; i++) {
+        display.fillRect(((x + 5) - scale * 3) + offset, y - (scale * 3), scale * 3, linesize, colour);
 
-        display.fillRect(x - scale * 3, y + scale * 1.5, scale * 4, linesize, colour);
-        display.fillRect((x + 5) - scale * 3, y + scale * 2.0, scale * 4, linesize, colour);
-        display.fillRect((x + 10) - scale * 3, y + scale * 2.5, scale * 3, linesize, colour);
+        display.fillRect(((x - scale) - scale * 2) + offset, y - (scale * 2), scale * 5, linesize, colour);
+
+        display.fillRect(((x - scale) - scale * 3) + offset, y - scale, scale * 4, linesize, colour);
+
+        display.fillRect((x - scale * 3) + offset, y, scale * 4, linesize, colour);
+
+        display.fillRect(((x + 5) - scale * 3) + offset, y + scale, scale * 3, linesize, colour); // bottom line
     }
 }
 
@@ -2424,22 +1839,17 @@ void addFog(int x, int y, int scale, int linesize, uint16_t colour)
  * @param y Display y coordinates
  * @param large_size Used to set the font size to use 
  */
-void noData(int x, int y, bool large_size)
-{
+void noData(int x, int y, bool large_size) {
     int scale = SMALL;
     int offset = 0;
-    if (large_size)
-    {
+    if (large_size) {
         scale = LARGE;
         offset = 7;
     }
 
-    if (scale == LARGE)
-    {
+    if (scale == LARGE) {
         display.setFont(&FreeMonoBold12pt7b);
-    }
-    else
-    {
+    } else {
         display.setFont(&DejaVu_Sans_Bold_11);
     }
 
@@ -2453,18 +1863,262 @@ void noData(int x, int y, bool large_size)
  * @param y Display y coordinates
  * @param starsize Size of the star to add, small or medium 
  */
-void addStar(int x, int y, star_size starsize)
-{
-    if (starsize == SMALL_STAR)
-    {
+void addStar(int x, int y, star_size starsize) {
+    if (starsize == SMALL_STAR) {
         display.drawTriangle(x, y, x - 2, y + 3, x + 2, y + 3, GxEPD_WHITE);
         display.drawTriangle(x, y + 4, x - 2, y + 1, x + 2, y + 1, GxEPD_WHITE);
-    }
-    else if (starsize == MEDIUM_STAR)
-    {
+    } else if (starsize == MEDIUM_STAR) {
         display.drawTriangle(x, y, x - 4, y + 6, x + 4, y + 6, GxEPD_WHITE);
         display.drawTriangle(x, y + 8, x - 4, y + 2, x + 4, y + 2, GxEPD_WHITE);
     }
+}
+
+/**
+ * @brief Draw graph with 2 sets of data
+ *
+ * @param x     x coordinates
+ * @param y     y coordinates
+ * @param w     graph width
+ * @param h     graph height
+ * @param Data  Data array one
+ * @param Data2 Data array two (null == empty array)
+ * @param len   Length of data array
+ * @param title graph title
+ */
+void drawGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], float Data2[], int len, String title) {
+    float ymin;
+    float ymax;
+    int ticklines = 5;
+    int auto_scale_margin = 0;
+
+    int maxYscale = -10000;
+    int minYscale = 10000;
+
+    for (int i = 1; i < len; i++) {
+        if (Data[i] >= maxYscale) {
+            maxYscale = Data[i];
+        }
+        if (Data[i] <= minYscale) {
+            minYscale = Data[i];
+        }
+
+        if (Data2 != NULL) {
+            if (Data2[i] >= maxYscale) {
+                maxYscale = Data2[i];
+            }
+            if (Data2[i] <= minYscale) {
+                minYscale = Data2[i];
+            }
+        }
+    }
+    maxYscale = round(maxYscale + auto_scale_margin); // Auto scale the graph and round to the nearest value defined, default was Y1Max
+    ymax = round(maxYscale + 0.5);
+    if (minYscale != 0) {
+        minYscale = round(minYscale - auto_scale_margin); // Auto scale the graph and round to the nearest value defined, default was Y1Min
+    }
+    ymin = round(minYscale);
+
+    float steps = (ymax - ymin) / (ticklines);
+
+    // Title
+    display.setFont();
+    drawString(x + w / 2, y - 24, title, CENTER);
+
+    // Draw y-axis tick markers and dashed lines
+    for (byte i = 0; i < ticklines + 1; i++) {
+        drawString(x - 2, y + ((h / ticklines) * i - 12), String(lrint(ymin + steps * (ticklines - i))), RIGHT);
+        if (i == 0) {
+            continue;
+        }
+        display.drawLine(x + 1, y + ((h / ticklines) * i), x + w - 1, y + ((h / ticklines) * i), GxEPD_RED);
+        bool blank = true;
+        for (byte r = 0; r < w; r = r + 3) {
+            if (blank) {
+                display.drawLine(x + r, y + ((h / ticklines) * i), x + r + 3, y + ((h / ticklines) * i), GxEPD_WHITE);
+                blank = false;
+            } else {
+                blank = true;
+            }
+        }
+    }
+
+    // x-Axis
+    display.drawLine(x, y + h, x + w, y + h, GxEPD_BLACK);
+
+    // y-Axis
+    display.drawLine(x, y, x, y + h, GxEPD_BLACK);
+
+    // Draw data line 1
+    float x1 = x + 1;
+    float y1 = y + (ymax - constrain(Data[0], ymin, ymax)) / (ymax - ymin) * h;
+    float y3 = y + (ymax - constrain(Data2[0], ymin, ymax)) / (ymax - ymin) * h;
+
+    if (y1 > y + h - 1)
+        y1 = y + h - 1;
+    if (y3 > y + h - 1)
+        y3 = y + h - 1;
+    float x2, y2, y4;
+
+    for (int i = 1; i < len; i++) {
+        x2 = x + i * w / (len - 1) - 1;
+        y2 = y + (ymax - constrain(Data[i], ymin, ymax)) / (ymax - ymin) * h + 1;
+        y4 = y + (ymax - constrain(Data2[i], ymin, ymax)) / (ymax - ymin) * h + 1;
+        
+        if (y2 > y + h - 1)
+            y2 = y + h - 1;
+        if (y4 > y + h - 1)
+            y4 = y + h - 1;
+
+        display.drawLine(x1, y3, x2, y4, GxEPD_RED);
+
+        for (byte r = 0; r < ceil(w / len) + 1; r++) {
+            float m = (y4 - y3) / (x2 - x1);
+            float b = y3 - m * x1;
+            display.drawLine(x1 + r, y + h - 1, x1 + r, m * (x1 + r) + b, GxEPD_RED);
+        }
+
+        display.drawLine(x1, y1 - 1, x2, y2 - 1, GxEPD_BLACK); // thicker line on display
+        display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+
+        x1 = x2;
+        y1 = y2;
+        y3 = y4;
+    }
+
+    // x-Axis ticks
+    for (int i = 0; i <= 4; i++) {
+        if (i == 0) {
+            display.setCursor(x - 5 + (w / 4) * i, y + h + 6);
+        } else {
+            display.setCursor(x - 7 + (w / 4) * i, y + h + 6);
+        }
+        display.print(String(12 * i));
+    }
+
+    // Reset font
+    display.setFont(&DejaVu_Sans_Bold_11);
+}
+
+/**
+ * @brief Draw graph with 1 set of data
+ *
+ * @param x     x coordinates
+ * @param y     y coordinates
+ * @param w     graph width
+ * @param h     graph height
+ * @param Data  Data array
+ * @param len   Length of data array
+ * @param title graph title
+ */
+void drawSingleGraph(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float Data[], int len, String title) {
+    float ymin;
+    float ymax;
+    int ticklines = 5;
+    int auto_scale_margin = 0;
+
+    int maxYscale = -10000;
+    int minYscale = 10000;
+
+    for (int i = 1; i < len; i++) {
+        if (Data[i] >= maxYscale) {
+            maxYscale = Data[i];
+        }
+        if (Data[i] <= minYscale) {
+            minYscale = Data[i];
+        }
+    }
+
+    maxYscale = round(maxYscale + auto_scale_margin); // Auto scale the graph and round to the nearest value defined, default was Y1Max
+    ymax = round(maxYscale + 0.5);
+    if (minYscale != 0) {
+        minYscale = round(minYscale - auto_scale_margin); // Auto scale the graph and round to the nearest value defined, default was Y1Min
+    }
+    ymin = round(minYscale);
+
+    float steps = (ymax - ymin) / (ticklines);
+
+    // Title
+    display.setFont();
+    drawString(x + w / 2, y - 24, title, CENTER);
+
+    // Draw y-axis tick markers and dashed lines
+    for (byte i = 0; i < ticklines + 1; i++) {
+        // Due to space constraints only show values under 10 with a decimal point
+        if (ymin < 1 && ymax < 10) {
+            drawString(x - 2, y + ((h / ticklines) * i - 12), String(ymin + steps * (ticklines - i), 1), RIGHT);
+        } else {
+            drawString(x - 2, y + ((h / ticklines) * i - 12), String(lrint(ymin + steps * (ticklines - i))), RIGHT);
+        }
+
+        if (i == 0) {
+            continue;
+        }
+
+        display.drawLine(x + 1, y + ((h / ticklines) * i), x + w - 1, y + ((h / ticklines) * i), GxEPD_RED);
+        bool blank = true;
+        for (byte r = 0; r < w; r = r + 3) {
+            if (blank) {
+                display.drawLine(x + r, y + ((h / ticklines) * i), x + r + 3, y + ((h / ticklines) * i), GxEPD_WHITE);
+                blank = false;
+            } else {
+                blank = true;
+            }
+        }
+    }
+
+    // x-Axis
+    display.drawLine(x, y + h, x + w, y + h, GxEPD_BLACK);
+
+    // y-Axis
+    display.drawLine(x, y, x, y + h, GxEPD_BLACK);
+
+    // Draw data line 1
+    float x1 = x + 1;
+    float y1 = y + (ymax - constrain(Data[0], ymin, ymax)) / (ymax - ymin) * h;
+    float x2, y2;
+
+    if (y1 > y + h - 1) {
+        y1 = y + h - 1;
+    }
+
+    // Draw data on display
+    for (int i = 1; i < len; i++) {
+        x2 = x + i * w / (len - 1) - 1;
+        y2 = y + (ymax - constrain(Data[i], ymin, ymax)) / (ymax - ymin) * h + 1;
+        if (y2 > y + h - 1) {
+            y2 = y + h - 1;
+        }
+        // More solid line using 2 lines 1 pixel apart.
+        display.drawLine(x1, y1 - 1, x2, y2 - 1, GxEPD_BLACK);
+        display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+
+        x1 = x2;
+        y1 = y2;
+    }
+
+    // x-Axis ticks
+    // for (int i = 0; i <= 6; i++) {             // 72 hours
+    //   display.setCursor(x-7+(w/6)*i ,y+h+6);
+    for (int i = 0; i <= 4; i++) {
+        if (i == 0) {
+            display.setCursor(x - 5 + (w / 4) * i, y + h + 6);
+        } else {
+            display.setCursor(x - 7 + (w / 4) * i, y + h + 6);
+        }
+        display.print(String(12 * i));
+    }
+    // if (i == 0) {   // day 0 (now)
+    //   display.print("0");
+    // } else if ((12 * i) == 24) {   // day 1
+    //   display.print("24");
+    // } else if ((12 * i) == 48) {  // day 2
+    //   display.print("48");
+    // } else if ((12 * i) == 72) {  // day 3
+    //   display.print("72");
+    // }
+
+    // Reset font
+    display.setFont(&DejaVu_Sans_Bold_11);
 }
 
 /**
@@ -2475,20 +2129,17 @@ void addStar(int x, int y, star_size starsize)
  * @param text Test to display
  * @param align Text alignment on the screen
  */
-void drawString(int x, int y, String text, alignment align)
-{
+void drawString(int x, int y, String text, alignment align) {
     int16_t x1, y1; // the bounds of x,y and w and h of the variable 'text' in pixels.
     uint16_t w, h;
 
     display.setTextWrap(false);
     display.getTextBounds(text, x, y, &x1, &y1, &w, &h);
-    if (align == RIGHT)
-    {
+    if (align == RIGHT) {
         x = x - w;
     }
 
-    if (align == CENTER)
-    {
+    if (align == CENTER) {
         x = x - w / 2;
     }
 

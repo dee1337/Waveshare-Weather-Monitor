@@ -24,7 +24,6 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-
 #include "esp_adc_cal.h"    // So we can read the battery voltage
 
 #include "GxEPD2_GFX.h"
@@ -40,7 +39,7 @@
 #include "sunset.h"
 
 // CaptureLog setup
-#define CLOG_ENABLE true                        // this must be defined before cLog.h is included 
+#define CLOG_ENABLE false                        // this must be defined before cLog.h is included 
 #include "cLog.h"
 
 #if CLOG_ENABLE
@@ -59,8 +58,7 @@ const int forecast_counter = 7; // number of forecasts to get/show.
 const long sleep_duration = 30; // Number of minutes to go to sleep for
 const int sleep_hour = 22;      // Start power saving at 23:00
 const int wakeup_hour = 7;      // Stop power saving at 07:00
-
-const float LOW_BATTERY_VOLTAGE = 3.30; // warn user battery low!
+const long  gmt_offset_sec = 0;
 
 boolean large_icon = true;
 boolean small_icon = false;
@@ -68,10 +66,13 @@ boolean small_icon = false;
 #define LARGE 10
 #define SMALL 4
 
-// Battery voltage pin and T7-S3 power LED pin
+// T7-S3 power LED pin which we can turn off to save power
 #define LED_PIN 17
-#define BAT_ADC 2
 //#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+
+// Battery voltage pin
+#define BAT_ADC 2
+const float LOW_BATTERY_VOLTAGE = 3.40; // warn user battery low!
 
 #define DEBUG false
 
@@ -104,12 +105,14 @@ bool getTodaysWeather(void);
 bool getWeatherForecast(void);
 static void updateLocalTime(void);
 void initialiseDisplay(void);
-uint32_t readADC_Cal(int adc_raw);
 void logWakeupReason(void);
 void displayBattery(int x, int y);
-int calculateBatteryPercentage(double v);
 void goToSleep(void);
+static uint32_t readADC_Cal(const int adc_raw);
+uint32_t getBatteryVoltage(void);
+int calculateBatteryPercentage(double v);
 void displayErrorMessage(String message);
+void displayWifiErrorMessage(void);
 void displaySystemInfo(int x, int y);
 void drawString(int x, int y, String text, alignment align);
 void displayInformation(void);
@@ -203,6 +206,9 @@ char dateStringBuff[35];
 
 void setup()
 {
+    int wifi_connect_counter = 0;
+    bool wifi_connected = true;
+
     // Ensure power LED is off to save power.
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
@@ -234,50 +240,63 @@ void setup()
     WiFi.begin(SSID, WIFI_PASSWORD);
     while (WiFi.status() != WL_CONNECTED)
     {
-        delay(500);
         #if CLOG_ENABLE
         Serial.print(".");
         #endif
+
+        delay(500);
+        wifi_connect_counter++;
+
+        // Give the wifi a few seconds to connect
+        if (wifi_connect_counter > 30) {
+            wifi_connected = false;
+            break;
+        }
     }
 
-    #if CLOG_ENABLE
-    Serial.println("");
-    Serial.println("Connecting to Wi-Fi...");
-    #endif
+    if (wifi_connected) {
+        #if CLOG_ENABLE
+        Serial.println("");
+        Serial.println("Connecting to Wi-Fi...");
+        #endif
 
-    ipAddress = WiFi.localIP().toString();
-    rssi = WiFi.RSSI();
+        ipAddress = WiFi.localIP().toString();
+        rssi = WiFi.RSSI();
 
-    CLOG(myLog1.add(), "IP Address: %s", ipAddress);
-    #if CLOG_ENABLE
-    Serial.println("Connecting to NTP Time Server...");
-    #endif
+        CLOG(myLog1.add(), "IP Address: %s", ipAddress);
+        #if CLOG_ENABLE
+        Serial.println("Connecting to NTP Time Server...");
+        #endif
 
-    configTime(0, 3600, SNTP_TIME_SERVER);
-    updateLocalTime();
+        configTime(0, 0, SNTP_TIME_SERVER);
+        updateLocalTime();
 
-    #if CLOG_ENABLE
-    Serial.println("All set up, time to get weather information and display it...");
-    #endif
+        #if CLOG_ENABLE
+        Serial.println("All set up, time to get weather information and display it...");
+        #endif
 
-    bool today_flag = getTodaysWeather();
-    bool forecast_flag = getWeatherForecast();
+        bool today_flag = getTodaysWeather();
+        bool forecast_flag = getWeatherForecast();
 
-    // Turn off wifi to save power
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
+        // Turn off wifi to save power
+        WiFi.disconnect();
+        WiFi.mode(WIFI_OFF);
 
-    battery_voltage = (round(readADC_Cal(analogRead(BAT_ADC)) * 2)) / 1000;
+        battery_voltage = getBatteryVoltage(); 
 
-    if (today_flag == true || forecast_flag == true)
-    {
-        CLOG(myLog1.add(), "All data retrieved successfully.");
-        displayInformation();
-    }
-    else
-    {
-        CLOG(myLog1.add(), "Unable to retrieve data!");
-        displayErrorMessage("Unable to retrieve data, contact support ;-)");
+        if (today_flag == true || forecast_flag == true)
+        {
+            CLOG(myLog1.add(), "All data retrieved successfully.");
+            displayInformation();
+        }
+        else
+        {
+            CLOG(myLog1.add(), "Unable to retrieve data!");
+            displayErrorMessage("Unable to retrieve data, contact support ;-)");
+        }
+    } else {
+        CLOG(myLog1.add(), "Unable to connect to wifi!");
+        displayWifiErrorMessage();
     }
 
     goToSleep();
@@ -295,20 +314,6 @@ void loop()
          * Should never get here - using deep sleep after displaying weather.
          */
     }
-}
-
-/**
- * @brief Get the battery voltage
- * 
- * @param adc_raw Raw battery voltage from an adc read.
- * @return uint32_t Battery voltage, e.g. 3999.0
- */
-uint32_t readADC_Cal(int adc_raw)
-{
-    esp_adc_cal_characteristics_t adc_chars;
-
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-    return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
 }
 
 /**
@@ -377,6 +382,56 @@ void logWakeupReason(void)
     default : CLOG(myLog1.add(), "Wakeup was not caused by deep sleep: %d\n", wakeup_reason); break;
     }
 }
+
+/**
+ * @brief Get the battery voltage
+ * 
+ * @return uint32_t Battery voltage, e.g. 3.9v
+ */
+uint32_t getBatteryVoltage(void)
+{
+    float v = 0.0;
+    v = (readADC_Cal(analogRead(BAT_ADC))) * 2;
+    CLOG(myLog1.add(), "getBatteryVoltage: %f", v);
+    return v;
+}
+
+/**
+ * @brief Get the battery voltage via the battery pin
+ * 
+ * @param adc_raw Raw battery voltage from an adc read.
+ * @return uint32_t Battery voltage, e.g. 3999.0
+ */
+static uint32_t readADC_Cal(const int adc_raw)
+{
+    esp_adc_cal_characteristics_t adc_chars;
+
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+    return (esp_adc_cal_raw_to_voltage(adc_raw, &adc_chars));
+}
+
+/**
+ * @brief Calculate the appromimate battery life percentage remaining. Returns a value 
+ * between 0-100% rounded to the nearest integer.
+ * 
+ * @param v Voltage reading of the battery.
+ * @return int Percentage remaining
+ */
+int calculateBatteryPercentage(double v)
+{
+  // this formula was calculated using samples collected from a lipo battery
+  double y = -  144.9390 * v * v * v
+             + 1655.8629 * v * v
+             - 6158.8520 * v
+             + 7501.3202;
+
+  // enforce bounds, 0-100
+  y = max(y, 0.0);
+  y = min(y, 100.0);
+  
+  y = round(y);
+  return static_cast<int>(y);
+} 
 
 /**
  * @brief Update global buffers with various times/date values.
@@ -653,6 +708,39 @@ void displayErrorMessage(String message)
     display.hibernate();
 }
 
+
+/**
+ * @brief Display an error message on the display to the user.
+ * 
+ * @param message Message to display
+ */
+void displayWifiErrorMessage(void)
+{
+    display.setFullWindow();
+    display.firstPage();
+
+    do
+    {
+        display.fillScreen(GxEPD_WHITE);
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(10, 60);
+        drawString(200, 60, "Error: Unable to connect to wifi network.", CENTER);
+        display.setTextColor(GxEPD_RED);
+        drawString(200, 85, SSID, CENTER);
+        display.setTextColor(GxEPD_BLACK);
+        drawString(30, 130, "a) Check wifi network is on.", LEFT);
+        drawString(30, 150, "b) Reboot display via on/off or reset button.", LEFT);
+        drawString(30, 170, "c) Move display closer to your router.", LEFT);
+        drawString(30, 190, "d) Contact local support.", LEFT);
+        drawString(30, 210, "e) Contact non-local support.", LEFT);
+
+        battery_voltage = getBatteryVoltage(); 
+        displayBattery(304, 279);
+    } while (display.nextPage());
+
+    display.hibernate();
+}
+
 /**
  * @brief Set up the display with all of the information we're going to show, e.g. temperature,
  * forecast, sun rise and set times...
@@ -689,7 +777,7 @@ void displayInformation(void)
 void displayHeader(void)
 {
     drawString((SCREEN_WIDTH / 2) + 8, 1, LOCATION, CENTER);
-    drawString(SCREEN_WIDTH - 5, 2, dateStringBuff, RIGHT);
+    drawString(SCREEN_WIDTH - 5, 3, dateStringBuff, RIGHT);
     drawString(1, 1, "@", LEFT);
     drawString(13, 4, timeStringBuff, LEFT);
     drawString(115, 4, VERSION, CENTER);
@@ -751,11 +839,9 @@ void displaySystemInfo(int x, int y)
 
     display.drawRect(x, y, 135, 62, GxEPD_BLACK);
 
-    // display battery voltage
-    displayBattery(x + 43, y + 5);
+    int rssi_x = x + 29;
+    int rssi_y = y + 22;
 
-    int rssi_x = x + 33;
-    int rssi_y = y + 36;
     for (int _rssi = -100; _rssi <= rssi; _rssi = _rssi + 20)
     {
         if (_rssi <= -20)
@@ -775,7 +861,10 @@ void displaySystemInfo(int x, int y)
     display.fillRect(rssi_x + 60, rssi_y - 1, 4, 1, GxEPD_BLACK);
     drawString(rssi_x, rssi_y - 9, String(rssi) + "dBm", LEFT);
 
-    drawString(x + 68, y + 45, ipAddress, CENTER);
+    drawString(x + 68, y + 30, ipAddress, CENTER);
+
+    // display battery voltage
+    displayBattery(x + 45, y + 44);
 }
 
 /**
@@ -788,59 +877,46 @@ void displaySystemInfo(int x, int y)
  */
 void displayBattery(int x, int y) {
     int percentage = 0;
-    int p = 0;
     int colour = GxEPD_BLACK;
+    
+    float bv = battery_voltage/1000;
 
-    if (battery_voltage >= 3 ) { 
+    if (bv >= LOW_BATTERY_VOLTAGE) { 
         //p = 2836.9625 * pow(battery_voltage, 4) - 43987.4889 * pow(battery_voltage, 3) + 255233.8134 * pow(battery_voltage, 2) - 656689.7123 * battery_voltage + 632041.7303;
-        percentage = calculateBatteryPercentage(battery_voltage);
-        CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", battery_voltage, percentage);
+        percentage = calculateBatteryPercentage(bv);
+        CLOG(myLog1.add(), "Battery voltage: %.2f, percentage: %d", bv, percentage);
 
-        if (battery_voltage <= LOW_BATTERY_VOLTAGE || percentage < 10) {
+        if (percentage <= 25) {
             colour = GxEPD_RED;
         }
 
-        display.drawRect(x + 13, y + 3, 29, 10, GxEPD_BLACK);
-        display.fillRect(x + 42, y + 5, 2, 5, GxEPD_BLACK);
-        display.fillRect(x + 15, y + 5, 25 * percentage / 100.0, 6, colour);
+        display.drawRect(x + 9, y + 3, 34, 10, GxEPD_BLACK);
+        display.fillRect(x + 43, y + 5, 2, 6, GxEPD_BLACK);
+        display.fillRect(x + 11, y + 5, 31 * percentage / 100.0, 6, colour);
+
+        // draw lines to give a better battery icon
+        // 25% = 7
+        // 50% = 15
+        // 75% = 23
+        // 100% = 
+        display.fillRect((x + 11) + 7, y + 4, 1, 8, GxEPD_WHITE);  // 25% across
+        display.fillRect((x + 11) + 15, y + 4, 1, 8, GxEPD_WHITE);  // 50% across
+        display.fillRect((x + 11) + 23, y + 4, 1, 8, GxEPD_WHITE);  // 75% across
+        display.fillRect((x + 11) + 30, y + 4, 1, 8, GxEPD_WHITE);  // 100% across
 
         display.setTextColor(colour);
         drawString(x + 48, y + 4, String(percentage) + "%", LEFT);
-        drawString(x - 35, y + 4,  String(battery_voltage, 2) + "v", LEFT);
+        display.setTextColor(GxEPD_BLACK);
+        drawString(x - 36, y + 4,  String(bv, 2) + "v", LEFT);
     } 
     else
     {
-        CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", battery_voltage);
+        CLOG(myLog1.add(), "Battery voltage: %.2f, recharge now!", bv);
         display.setTextColor(GxEPD_RED);
         drawString(x - 39, y + 4, "Recharge Battery", LEFT);
+        display.setTextColor(GxEPD_BLACK);
     }
-
-    // reset text colour to black
-    display.setTextColor(GxEPD_BLACK);
 }
-
-/**
- * @brief Calculate the appromimate battery life percentage remaining. Returns a value 
- * between 0-100% rounded to the nearest integer.
- * 
- * @param v Voltage reading of the battery.
- * @return int Percentage remaining
- */
-int calculateBatteryPercentage(double v)
-{
-  // this formula was calculated using samples collected from a lipo battery
-  double y = -  144.9390 * v * v * v
-             + 1655.8629 * v * v
-             - 6158.8520 * v
-             + 7501.3202;
-
-  // enforce bounds, 0-100
-  y = max(y, 0.0);
-  y = min(y, 100.0);
-  
-  y = round(y);
-  return static_cast<int>(y);
-} 
 
 /**
  * @brief Display some small clouds and the percentage value of the cloud cover. 0% is
@@ -1178,7 +1254,7 @@ void displayWeatherForecast(int x, int y)
 }
 
 /**
- * @brief Display a single forcast
+ * @brief Display a single 3 hourly forcast
  * 
  * @param x Display x coordinates
  * @param y Display y coordinates
@@ -1217,16 +1293,15 @@ void displaySingleForecast(int x, int y, int offset, int index)
  * @brief Convert unix time to the current time
  * 
  * @param unix_time Unix time value to convert
- * @return String Current time hh:mm
+ * @return String Current time hh:mm AM/PM
  */
 String convertUnixTime(int unix_time)
 {
-    // Returns '21:12 PM'
+    // E.G. Returns '21:12 PM'
     time_t tm = unix_time;
-    struct tm *now_tm = localtime(&tm);
     char output[10];
 
-    strftime(output, sizeof(output), "%H:%M %p", now_tm);
+    strftime(output, sizeof(output), "%H:%M %p", gmtime(&tm));
 
     return output;
 }
@@ -1661,14 +1736,14 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon)
             display.fillRect(x + 5, y, 124, 128, GxEPD_BLACK);
             display.setTextColor(GxEPD_WHITE); // invert for night time
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_WHITE);
-            displayRain(x + 60, y + 115);
+            displayRain(x + 67, y + 115);
             display.setTextColor(GxEPD_BLACK); // reset colour
         }
         else
         {
             display.drawRect(x + 5, y, 124, 128, GxEPD_BLACK);
             displayPressureAndTrend(x + 45, y + 100, weather.pressure, weather.trend, GxEPD_BLACK);
-            displayRain(x + 60, y + 115);
+            displayRain(x + 67, y + 115);
         }
         x = x + 65;
         y = y + 65;
@@ -2008,7 +2083,6 @@ void chanceOfRainIcon(int x, int y, bool large_size, String icon_name, uint16_t 
  * @param large_size Large or small icon
  * @param icon_name Icon name, looking to see if this is a day or night icon
  */
-
 void rainIcon(int x, int y, bool large_size, String icon_name)
 {
     int scale = SMALL;
