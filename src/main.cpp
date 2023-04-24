@@ -243,6 +243,11 @@ void setup() {
 
         //Serial.println("Connecting to NTP Time Server...");
         configTime(0, 0, SNTP_TIME_SERVER);
+
+        // Set timezone - London for us
+        setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+        tzset();
+
         updateLocalTime();
 
         //Serial.println("All set up, display some information...");
@@ -405,6 +410,7 @@ int calculateBatteryPercentage(double v)
   y = round(y);
   return static_cast<int>(y);
 } 
+
 
 /**
  * @brief Update global buffers with various times/date values.
@@ -834,7 +840,12 @@ void displayTemperature(int x, int y) {
     }
 
     String buffer = String(weather.low, 0) + "'/" + String(weather.high, 0) + "'";
-    drawString(x + 70, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+
+    if (weather.low >= 10 && weather.low < 20) {
+        drawString(x + 65, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+    } else {
+        drawString(x + 70, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+    }
 
     display.setFont(&DejaVu_Sans_Bold_11);
 
@@ -1390,7 +1401,7 @@ void cloudyIcon(int x, int y, bool large_size, String icon_name) {
 
     if (large_size) {
         scale = LARGE;
-        offset = 0;
+        offset = 4;
     }
 
     if (scale == SMALL) {

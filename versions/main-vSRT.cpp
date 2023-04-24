@@ -269,6 +269,11 @@ void setup()
         #endif
 
         configTime(0, 0, SNTP_TIME_SERVER);
+                
+        // Set timezone - London for us
+        setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+        tzset();
+
         updateLocalTime();
 
         #if CLOG_ENABLE
