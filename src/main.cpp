@@ -811,7 +811,7 @@ void displayTemperature(int x, int y) {
 
     display.setFont(&DSEG7_Classic_Bold_21);
     display.setTextSize(2);
-
+    
     // Center the tempearature in the weather box area
     if (weather.temperature < 0)
     {
@@ -1267,7 +1267,7 @@ void displayWeatherIcon(int x, int y, String icon, bool large_icon) {
         x = x + 65;
         y = y + 65;
     }
-
+    
     if (icon == "01d") { // sun
         sunnyIcon(x, y, large_icon, icon, GxEPD_RED);
     } else if (icon == "01n") {
@@ -1317,32 +1317,7 @@ void sunnyIcon(int x, int y, bool large_size, String icon_name, uint16_t icon_co
 
     if (icon_name.endsWith("n")) { // Night time, show stars
         addMoon(x, y + offset, scale);
-
-        if (!large_size) {
-            // Small stars
-            addStar(x, y, SMALL_STAR);
-            addStar(x - 18, y + 3, SMALL_STAR);
-            addStar(x + 17, y - 10, SMALL_STAR);
-
-            // Medium stars
-            addStar(x - 1, y - 14, MEDIUM_STAR); // top left star
-            addStar(x + 10, y, MEDIUM_STAR);     // bottom right star
-        } else {
-            // Fill area with random stars
-            int horizontal = 0;
-            int vertical = 0;
-            int left = 150;
-            int top = 45;
-            int width = 115;
-            int height = 90;
-            display.setTextColor(GxEPD_WHITE);
-            for (int i = 0; i <= 41; i++) {
-                horizontal = (int)(((rand() / (RAND_MAX * 1.0f)) * width) + left);
-                vertical = (int)(((rand() / (RAND_MAX * 1.0f)) * height) + top);
-                drawString(horizontal, vertical, ".", LEFT);
-            }
-            display.setTextColor(GxEPD_BLACK);
-        }
+        addSun(x, y + offset, scale, large_size, icon_color);
     } else { // Day time, show sun
         scale = scale * 1.5;
         addSun(x, y + offset, scale, large_size, icon_color);
