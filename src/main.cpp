@@ -17,6 +17,16 @@
  *   DC                18
  *   RST               16
  *   BUSY              15
+ * 
+ * v3.2 aka Daniel V1.0: 4.2" Waveshare with 4 Greyscales on ESP32-WROOM32-D
+ *   Waveshare         ESP32-WROOM32-D PIN                        
+ *   DIN               23 (SPI MOSI)
+ *   CLK               18 (SPI SCK)
+ *   CS                5 (SPI chip selection)
+ *   DC                17
+ *   RST               16
+ *   BUSY              4                              
+ * 
  */
 #include <Arduino.h>
 #include <WiFi.h>
@@ -25,7 +35,9 @@
 #include "esp_adc_cal.h"    // So we can read the battery voltage
 
 #include "GxEPD2_GFX.h"
-#include "GxEPD2_3C.h"                          // 3 colour screen
+#include "GxEPD2_BW.h"
+
+//#include "GxEPD2_3C.h"                          // 3 colour screen
 #include "GxEPD2_display_selection_new_style.h" // For selecting screen
 
 #include <Fonts/FreeMonoBold12pt7b.h>
@@ -38,6 +50,11 @@
 #include "OpenSans_Regular24pt7b.h"
 #include "OpenSans_Regular18pt7b.h"
 
+// turn red into black, if no red available:
+#if defined(_GxEPD2_BW_H_)
+    #define GxEPD_RED GxEPD_BLACK
+#endif
+
 // CaptureLog setup
 #define CLOG_ENABLE false                        // this must be defined before cLog.h is included 
 #include "cLog.h"
@@ -49,7 +66,7 @@ CLOG_NEW myLog1(maxEntries, maxEntryChars, NO_TRIGGER, NO_WRAP);
 #endif
 
 // T7-S3 power LED pin which we can turn off to save power
-#define LED_PIN 17
+#define LED_PIN 14
 //#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 
 // Battery voltage pin
@@ -65,7 +82,7 @@ const int forecast_counter = 16; // Number of forecasts to get/show.
 
 const long sleep_duration = 30; // Number of minutes to go to sleep for
 const int sleep_hour = 23;      // Start power saving at 23:00
-const int wakeup_hour = 8;      // Stop power saving at 08:00
+const int wakeup_hour = 6;      // Stop power saving at 08:00
 
 #define LARGE 10
 #define SMALL 4
@@ -94,6 +111,7 @@ enum star_size {
 /* Function prototypes */
 bool getTodaysWeather(void);
 bool getWeatherForecast(void);
+bool getTodaysWater(void);
 bool getDailyWeatherForecast(void);
 static void updateLocalTime(void);
 void initialiseDisplay(void);
@@ -108,6 +126,7 @@ void displayWifiErrorMessage(void);
 void drawString(int x, int y, String text, alignment align);
 void displayInformation(void);
 void displayTemperature(int x, int y);
+void displayWater(int x, int y);
 void displayCloudCover(int x, int y, int cover);
 void addCloud(int x, int y, int scale, int linesize);
 void displaySystemInfo(int x, int y);
@@ -182,6 +201,30 @@ typedef struct WeatherStruct {
 WeatherStruct weather;
 WeatherStruct forecast[forecast_counter];
 
+// water data 
+typedef struct WaterStruct {
+    String station; //station name
+    String height_longname; // WASSERSTAND_ROHDATEN
+    String height_unit; // cm
+    float height = 0;
+    String height_timestamp; // timestamp "2024-09-10T08:30:00+02:00"
+    String height_stateMnwMhw; // "normal"
+    String height_stateNswHsw; // "normal"
+
+    String temp_longname; // "WASSERTEMPERATUR"
+    String temp_unit; // "°C"
+    float temp = 0; //22.6
+    String temp_timestamp; // "2024-09-10T08:30:00+02:00"
+
+    String speed_longname; // "ABFLUSS"
+    String speed_unit; // "m³/s"
+    float speed = 0; //92.0
+    String speed_timestamp; // "2024-09-10T08:30:00+02:00"
+} WaterStruct;
+
+WaterStruct water;
+
+
 char timeStringBuff[7]; // buffer for time on the display
 char dateStringBuff[4];
 char dayStringBuff[10];
@@ -244,8 +287,10 @@ void setup() {
         //Serial.println("Connecting to NTP Time Server...");
         configTime(0, 0, SNTP_TIME_SERVER);
 
-        // Set timezone - London for us
-        setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+        // Set timezone - London
+        // setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+        // Set timezone - Germany for us: CET-1CEST,M3.5.0,M10.5.0/3
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
         tzset();
 
         updateLocalTime();
@@ -255,6 +300,14 @@ void setup() {
 
         bool today_flag = getTodaysWeather();
         bool forecast_flag = getWeatherForecast();
+        bool waterdata_flag = getTodaysWater();
+
+        /*
+        // DEBUG WATERDATA DANIEL:
+        Serial.print("waterdata_flag:");Serial.println(waterdata_flag);
+        Serial.print("water measurements station:");Serial.println(water.station);
+        Serial.print("water temperature:");Serial.println(water.temp);
+        */
 
         // Turn off wifi to save power
         WiFi.disconnect();
@@ -266,6 +319,7 @@ void setup() {
         {
             CLOG(myLog1.add(), "All data retrieved successfully.");
             displayInformation();
+            
         }
         else
         {
@@ -277,6 +331,7 @@ void setup() {
         CLOG(myLog1.add(), "Unable to connect to wifi!");
         displayWifiErrorMessage();
     }
+    
 
     goToSleep();
 }
@@ -287,6 +342,7 @@ void setup() {
  * 
  */
 void loop() {
+    Serial.print("DEEP SLEEP DID NOT WORK !!!!");
     while (true) {
         /*
          * Should never get here - using deep sleep
@@ -304,8 +360,8 @@ void goToSleep(void) {
 
     struct tm timeinfo;
 
-    display.powerOff(); // should be in hibernate but no harm tuning it off
-
+    // display.powerOff(); // should be in hibernate but no harm tuning it off
+    display.hibernate(); // turns powerOff() and sets controller to deep sleep for minimum power use
     getLocalTime(&timeinfo);
 
     if (timeinfo.tm_hour >= sleep_hour || timeinfo.tm_hour < wakeup_hour)
@@ -431,6 +487,94 @@ static void updateLocalTime(void)
     strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo); // 15:15
 }
 
+
+/**
+ * @brief Get the Todays Water from pegelonline.wsv.de
+ * https://www.pegelonline.wsv.de/webservices/rest-api/v2/stations/66ff3eb4-513b-478b-abd2-2f5126ea66fd.json?includeTimeseries=true&includeCurrentMeasurement=true
+ * 
+ * @return true If we successfully retrieved the weather
+ * @return false If we failed to retrieve the weather
+ */
+bool getTodaysWater(void)
+{
+    WiFiClientSecure client;
+    bool retcode = true;
+    int port = 443;
+    const char *host = "www.pegelonline.wsv.de";
+
+    uint32_t dt = millis();
+
+    client.setInsecure(); // certificate is not checked
+
+    if (!client.connect(host, port)) {
+        CLOG(myLog1.add(), "HTTPS[1] connection to www.pegelonline.wsv.de failed!");
+        return false;
+    }
+
+    uint32_t timeout = millis();
+    char c = 0;
+
+    // Send GET request
+    client.print(String("GET ") + WATER_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line == "\r") {
+            //Serial.println("Header end found.");
+            break;
+        }
+
+        Serial.println(line);
+
+        if ((millis() - timeout) > 5000UL) {
+            //Serial.println("HTTP header timeout");
+            client.stop();
+            return false;
+        }
+    }
+
+    //Serial.print("JSON length: "); Serial.println(client.available());
+    //Serial.println("Parsing JSON...");
+
+    // bool decode = false;
+    DynamicJsonDocument doc(20 * 1024);
+
+    //Serial.println("Deserialization process starting...");
+
+    // Parse JSON object
+    DeserializationError err = deserializeJson(doc, client);
+    if (err) {
+
+        CLOG(myLog1.add(), "deserializeJson(waterdata) failed: %s", err.c_str());
+        retcode = false;
+    }
+    else {
+        water.station = doc["shortname"].as<String>(); //station name
+        water.height_longname = doc["timeseries"][0]["longname"].as<String>();
+        water.height_unit = doc["timeseries"][0]["unit"].as<String>(); // "cm"
+        water.height = doc["timeseries"][0]["currentMeasurement"]["value"]; // float, e.g. 159.0
+        water.height_timestamp = doc["timeseries"][0]["currentMeasurement"]["timestamp"].as<String>(); // timestamp "2024-09-10T08:30:00+02:00"
+        water.height_stateMnwMhw = doc["timeseries"][0]["currentMeasurement"]["stateMnwMhw"].as<String>(); // "normal"
+        water.height_stateNswHsw = doc["timeseries"][0]["currentMeasurement"]["stateNswHsw"].as<String>(); // "normal"
+        
+        water.temp_longname = doc["timeseries"][1]["longname"].as<String>(); // "WASSERTEMPERATUR"
+        water.temp_unit = doc["timeseries"][1]["unit"].as<String>(); // "°C"
+        water.temp = doc["timeseries"][1]["currentMeasurement"]["value"]; //22.6
+        water.temp_timestamp = doc["timeseries"][1]["currentMeasurement"]["timestamp"].as<String>(); // timestamp "2024-09-10T08:30:00+02:00"
+
+        water.speed_longname = doc["timeseries"][5]["longname"].as<String>(); // "ABFLUSS"
+        water.speed_unit = doc["timeseries"][5]["unit"].as<String>(); // "m³/s"
+        water.speed = doc["timeseries"][5]["currentMeasurement"]["value"]; //92.0
+        water.speed_timestamp = doc["timeseries"][5]["currentMeasurement"]["timestamp"].as<String>(); // timestamp "2024-09-10T08:30:00+02:00"
+
+
+        CLOG(myLog1.add(), "Deserialized today's water in %ld ms", millis() - dt);
+    }
+
+    client.stop();
+
+    return retcode;
+}
+
 /**
  * @brief Get the Todays Weather from openweathermaps.org
  * 
@@ -458,7 +602,6 @@ bool getTodaysWeather(void)
 
     // Send GET request
     client.print(String("GET ") + WEATHER_URL + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
-
     while (client.connected()) {
         String line = client.readStringUntil('\n');
         if (line == "\r") {
@@ -501,6 +644,7 @@ bool getTodaysWeather(void)
         weather.pressure = doc["main"]["pressure"];
         weather.humidity = doc["main"]["humidity"];
         weather.wind_speed = doc["wind"]["speed"];
+        weather.wind_speed = weather.wind_speed * 3.6; // convert from m/s to km/h
         weather.wind_deg = doc["wind"]["deg"];
         weather.wind_gust = doc["wind"]["gust"];
         weather.sunrise = doc["sys"]["sunrise"];
@@ -587,6 +731,7 @@ bool getWeatherForecast(void)
             forecast[i].humidity = doc["list"][i]["main"]["humidity"];
             forecast[i].clouds = doc["list"][i]["clouds"]["all"];
             forecast[i].wind_speed = doc["list"][i]["wind"]["speed"];
+            forecast[i].wind_speed *= 3.6; // convert from m/s to km/h
             forecast[i].wind_deg = doc["list"][i]["wind"]["deg"];
             forecast[i].rain = doc["list"][i]["rain"]["3h"];
             forecast[i].snow = doc["list"][i]["snow"]["3h"];
@@ -703,13 +848,13 @@ void displayInformation(void)
 
         // lines between temp/icon/wind
         display.drawLine(145, 0, 145, 109, GxEPD_BLACK);
-        display.drawLine(147, 0, 147, 109, GxEPD_BLACK);
-        display.drawLine(276, 0, 276, 109, GxEPD_BLACK);
+        display.drawLine(147, 0, 147, 109, GxEPD_BLACK); // temperature, right | -> could be 121
+        display.drawLine(276, 0, 276, 109, GxEPD_BLACK); //weather icon, right |
         display.drawLine(278, 0, 278, 109, GxEPD_BLACK);
 
         // line after the two graphs
-        display.drawLine(262, 182, 262, 299, GxEPD_BLACK);
-        display.drawLine(264, 182, 264, 299, GxEPD_BLACK);
+        display.drawLine(262, 188, 262, 299, GxEPD_BLACK);
+        display.drawLine(264, 188, 264, 299, GxEPD_BLACK);
 
         // top middle lines
         display.drawLine(0, 110, 145, 110, GxEPD_BLACK); //x=125
@@ -718,16 +863,22 @@ void displayInformation(void)
         display.drawLine(121, 112, 399, 112, GxEPD_BLACK); //x=125
 
         // lines between sun and forecasts
-        display.drawLine(119, 112, 119, 180, GxEPD_BLACK);
-        display.drawLine(121, 112, 121, 180, GxEPD_BLACK);
+        display.drawLine(119, 112, 119, 186, GxEPD_BLACK);
+        display.drawLine(121, 112, 121, 186, GxEPD_BLACK);
         
         // bottom middle lines
-        display.drawLine(0, 180, 119, 180, GxEPD_BLACK);  // x=125
-        display.drawLine(121, 180, 399, 180, GxEPD_BLACK);  // x=125
+        //display.drawLine(0, 180, 119, 180, GxEPD_BLACK);  // x=125
+        display.drawLine(0, 186, 119, 186, GxEPD_BLACK);  // x=125
+        display.drawLine(121, 186, 399, 186, GxEPD_BLACK);  // x=125
 
+        display.drawLine(0, 188, 262, 188, GxEPD_BLACK);  // x=125
+        display.drawLine(264, 188, 399, 188, GxEPD_BLACK);  // x=125
 
-        display.drawLine(0, 182, 262, 182, GxEPD_BLACK);  // x=125
-        display.drawLine(264, 182, 399, 182, GxEPD_BLACK);  // x=125
+        // between WATER and GRAPH 2 | Daniel
+        display.drawLine(119, 188, 119, 299, GxEPD_BLACK);
+        display.drawLine(121, 188, 121, 299, GxEPD_BLACK);
+
+        
 
         displayTemperature(0, 0);
         displayWeatherIcon(146, -13, weather.icon, large_icon); // Weather icon
@@ -740,6 +891,7 @@ void displayInformation(void)
         displaySystemInfo(295, 185);
         displaySunAndMoon(2, 114); // Sunset and sunrise and moon state with icons
         displayWeatherForecast(118, 115);                               // Forecast
+        displayWater(0, 0); 
 
 //    } while (display.nextPage());
     display.display(false);  // works instead of do:while loop
@@ -851,6 +1003,69 @@ void displayTemperature(int x, int y) {
 
     drawString(x + 73, y + 4, String(weather.humidity) + "% RH", CENTER);
 }
+
+
+/**
+ * @brief Display the current temperature, current and height of the water.
+ * 
+ * @param x Display x coordinates
+ * @param y Display y coordinates
+ */
+void displayWater(int x, int y) {
+    // orientieren an drawGraph(20, 209, 96, 75, temperature, feels_like, forecast_counter, "Temp & Feels"); //x = 155
+    int x_offset = -int(x/2); // because font size change from (2) to (1)
+    int y_offset = 189;
+    y += y_offset;
+
+    display.setFont(&DSEG7_Classic_Bold_21);
+    display.setTextSize(1);
+    
+    // Center the tempearature in the weather box area
+    if (water.temp < 0)
+    {
+        drawString(x + x_offset, y + 61, "-", LEFT);                             // Show temperature sign to compensate for non-proportional font spacing
+        drawString(x + x_offset + 25, y + 25, String(fabs(water.temp), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else if (water.temp < 10)
+    {
+        drawString(x + x_offset + 25, y + 25, String(fabs(water.temp), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset + 95, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else if (water.temp < 20)
+    {
+        drawString(x, y + 25, String(fabs(water.temp), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + 105, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    else
+    {
+        drawString(x + x_offset + 25, y + 25, String(fabs(water.temp), 1), LEFT); // Show current Temperature without a '-' minus sign
+        display.setTextSize(1);
+        drawString(x + x_offset  + 25 + 114/2, y + 25, "'C", LEFT); // Add-in ° symbol ' in this font plus units
+    }
+    
+    
+
+    /*
+    if (water.low >= 10 && water.low < 20) {
+        drawString(x + 65, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+    } else {
+        drawString(x + 70, y + 82, buffer, CENTER); // Show forecast high and Low, in the font ' is a °
+    }
+    */
+    
+
+    display.setFont(&DejaVu_Sans_Bold_11);
+
+    drawString(x + 62, y + 4, "Water Stats", CENTER);
+
+    drawString(x + x_offset + 5, y + 58, "Level: " + String(int(water.height)) + " cm", LEFT);
+    drawString(x + x_offset + 5, y + 72, "Flow: " +String(water.speed, 0) +" m3", LEFT); // Show water stats in the font ' is a °
+}
+
 
 /**
  * @brief Current weather description as returned by openweathermap.org
@@ -989,7 +1204,7 @@ String titleCase(String text) {
  * @param x Display x coordinates
  * @param y Display y coordinates
  * @param angle Angle of the wind
- * @param windspeed Wind speed in mph
+ * @param windspeed Wind speed in kmh
  * @param radius Radius of the compass in pixels
  */
 void displayWind(int x, int y, float angle, float windspeed, int radius) {
@@ -998,6 +1213,7 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
     int dyo;
     int dxi;
     int dyi;
+    float kmh;
 
     arrow(x + offset, y + offset, radius - 11, angle, 15, 22, GxEPD_RED); // Show wind direction on outer circle of width and length
     display.setTextSize(0);
@@ -1033,11 +1249,11 @@ void displayWind(int x, int y, float angle, float windspeed, int radius) {
     drawString(x + offset, y + 4 + offset + radius, "S", CENTER);
     drawString(x - radius - 10 + offset, y - 3 + offset, "W", CENTER);
     drawString(x + radius + offset + 7, y - 4 + offset, "E", CENTER);
-
+    
     drawString(x + offset, y - 16 + offset, String(windspeed, 1), CENTER);
 
     display.setFont(); // use default 6x8 font
-    drawString(x + offset + 3, y - 15 + offset, "mph", CENTER);
+    drawString(x + offset + 3, y - 15 + offset, "km/h", CENTER);
 
     display.setFont(&DejaVu_Sans_Bold_11);
     drawString(x + offset, y + 10 + offset, String(angle, 0) + "'", CENTER);
@@ -1149,6 +1365,7 @@ void displaySunAndMoon(int x, int y) {
 
     drawString(x + 40, y + 15, convertUnixTime(weather.sunrise).substring(0, 8), LEFT); // 08:00 AM
     drawString(x + 40, y + 42, convertUnixTime(weather.sunset).substring(0, 8), LEFT);  // 19:00 PM
+
 }
 
 /**
@@ -1181,14 +1398,15 @@ void displayWeatherForecast(int x, int y) {
     //(x, y, w, h, Data[], lengthofdata, title)
     // drawSingleGraph(155, 205, 96, 75, temperature, forecast_counter, "Temperature");
 
-    drawSingleGraph(155, 205, 96, 75, pressure, forecast_counter, "Pressure (hPa)"); // x=295
+    drawSingleGraph(155, 209, 96, 75, pressure, forecast_counter, "Pressure (hPa)"); // x=295
+
 
     // drawSingleGraph(295, 205, 96, 75, humidity, forecast_counter, "Humidity (%)");
     //(x, y, w, h, Data1[], Data2[], lengthofdata, title)
 
-    drawGraph(20, 205, 96, 75, temperature, feels_like, forecast_counter, "Temp & Feels"); //x = 155
+    //drawGraph(20, 209, 96, 75, temperature, feels_like, forecast_counter, "Temp & Feels"); //x = 155
 
-    // drawGraph(295, 205, 96, 75, humidity, rainfall, forecast_counter, "Hum. & Rain (mm)");
+    //drawGraph(295, 205, 96, 75, humidity, rainfall, forecast_counter, "Hum. & Rain (mm)");
 }
 
 /**
@@ -1204,6 +1422,12 @@ void displaySingleForecast(int x, int y, int offset, int index) {
 
     drawString(x + offset / 2, y + 3, String(forecast[index].period.substring(11, 16)), CENTER);
     drawString(x + offset / 2, y + 50, String(forecast[index].high, 0) + "/" + String(forecast[index].low, 0), CENTER);
+    
+    // ROUNDED WINDSPEED in km/h : //
+    display.setFont(); // smaller font
+    int kmh_rounded = (int)(forecast[index].wind_speed + .5);
+    drawString(x + offset / 2, y + 55, String(kmh_rounded) + String("km/h"), CENTER); 
+    display.setFont(&DejaVu_Sans_Bold_11); // revert to normal font
 }
 
 /**
@@ -1218,41 +1442,10 @@ String convertUnixTime(uint32_t unix_time)
     time_t tm = unix_time;
     char output[10];
 
-    strftime(output, sizeof(output), "%H:%M %p", gmtime(&tm));
+    strftime(output, sizeof(output), "%H:%M %p", localtime(&tm)); // localtime instead of gmtime for automatic conversion
 
     return output;
 }
-
-/**
- * @brief Return the julian date of a date passed in.
- * 
- * @param d Day
- * @param m Month
- * @param y Year
- * @return int Julian date (0-366)
- */
-// int julianDate(int d, int m, int y) {
-//     int mm, yy, k1, k2, k3, j;
-
-//     yy = y - (int)((12 - m) / 10);
-//     mm = m + 9;
-
-//     if (mm >= 12)
-//         mm = mm - 12;
-
-//     k1 = (int)(365.25 * (yy + 4712));
-//     k2 = (int)(30.6001 * mm + 0.5);
-//     k3 = (int)((int)((yy / 100) + 49) * 0.75) - 38;
-//     // 'j' for dates in Julian calendar:
-//     j = k1 + k2 + d + 59 + 1;
-
-//     if (j > 2299160) {
-//         j = j - k3; // 'j' is the Julian date at 12h UT (Universal Time) For Gregorian calendar:
-//     }
-
-//     return j;
-// }
-
 
 /**
  * @brief Display the current weather as an icon
