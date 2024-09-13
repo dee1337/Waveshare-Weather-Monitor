@@ -1,5 +1,17 @@
 # ESP32 and Waveshare 4.2 e-ink 3 colour display weather monitor
 
+Changes in this fork:
+
+- Hardware - different setup: 4.2" B/W waveshare module with ESP32-Wroom32-D
+- UI Changes:
+    - red colors converted to black colors
+    - focus on watersports
+        - river statistics added in UI (temperature, level and flow) / added new endpoint for that
+        - wind speed forecasts added
+        - changed wind metrics from mph to km/h
+    - deactivated Temp & Feel graph
+
+-----
 A revised version (fixed minor errors) of the Weather Display written by G6EJD,
 and updated graphics to v2 of the 3 colour Waveshare e-ink display I am using.
 
